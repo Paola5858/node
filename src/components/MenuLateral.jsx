@@ -1,13 +1,13 @@
 import { useState } from 'react'
 
 const cadastros = [
-  ['funcionarios', 'funcionários', '01'],
-  ['clientes', 'clientes', '02'],
-  ['produtos', 'produtos', '03'],
-  ['fornecedores', 'fornecedores', '04'],
-  ['setores', 'setores', '05'],
-  ['usuarios', 'usuários', '06'],
-  ['equipamentos', 'equipamentos', '07'],
+  ['safra', 'safra', '01'],
+  ['unidade', 'unidade', '02'],
+  ['equipamento', 'equipamento', '03'],
+  ['medicao', 'medição', '04'],
+  ['unidademedida', 'unidade de medida', '05'],
+  ['tipoinformacao', 'tipo de informação', '06'],
+  ['indicadores', 'indicadores', '07'],
 ]
 
 function MenuLateral({ aberto, telaAtual, setTela }) {
