@@ -1,0 +1,74 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  background: #0f0f14;
+}
+
+.app-header {
+  background: rgba(20, 18, 24, 0.75);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.layout {
+  display: flex;
+  min-height: calc(100vh - 56px);
+}
+
+.menu-lateral {
+  flex-shrink: 0;
+  min-height: calc(100vh - 56px);
+  padding: 24px 20px;
+  overflow: hidden;
+  background: rgba(30, 24, 36, 0.55);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+  color: #f4eef7;
+  transition: width 0.35s ease, padding 0.35s ease;
+}
+
+.menu-lateral.aberto {
+  width: 250px;
+}
+
+.menu-lateral.fechado {
+  width: 0;
+  padding-left: 0;
+  padding-right: 0;
+}
+
+.menu-lateral button {
+  white-space: nowrap;
+}
+
+.btn-menu {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #f4eef7;
+  border-radius: 10px;
+  transition: background 0.2s ease, transform 0.15s ease;
+}
+
+.btn-menu:hover {
+  background: rgba(214, 128, 168, 0.25);
+  transform: translateX(2px);
+  color: #fff;
+}
+
+.area-conteudo {
+  flex: 1;
+  min-width: 0;
+  background: linear-gradient(160deg, #f7f0f5 0%, #efe6f1 100%);
+}
+
+.glass-card {
+  background: rgba(255, 255, 255, 0.55);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  border-radius: 16px;
+  padding: 20px;
+  box-shadow: 0 8px 24px rgba(90, 40, 70, 0.08);
+}
