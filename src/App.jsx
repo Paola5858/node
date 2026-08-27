@@ -2,30 +2,42 @@ import { useState } from 'react'
 import Header from './components/Header'
 import MenuLateral from './components/MenuLateral'
 import Conteudo from './components/Conteudo'
+import CadastroPage from './components/cadastros/CadastroPage'
 import './App.css'
 
 function App() {
   const [menuAberto, setMenuAberto] = useState(true)
+  const [tela, setTela] = useState('inicio')
 
   function alterarMenu() {
-    setMenuAberto(!menuAberto)
+    setMenuAberto((aberto) => !aberto)
+  }
+
+  function selecionarTela(novaTela) {
+    setTela(novaTela)
+    if (window.innerWidth < 900) setMenuAberto(false)
   }
 
   return (
-    <>
-      <Header />
+    <div className="app-shell">
+      <Header menuAberto={menuAberto} onToggleMenu={alterarMenu} />
       <div className="layout">
-        <MenuLateral aberto={menuAberto} />
+        <MenuLateral aberto={menuAberto} telaAtual={tela} setTela={selecionarTela} />
         <main className="area-conteudo">
-          <div className="p-3 border-bottom bg-white">
-            <button className="btn btn-primary" onClick={alterarMenu}>
-              ☰ menu
+          <div className="content-toolbar">
+            <button className="toolbar-button" type="button" onClick={alterarMenu} aria-label="Abrir ou fechar menu lateral">
+              <span className="toolbar-icon" aria-hidden="true">{menuAberto ? '×' : '+'}</span>
+              <span>{menuAberto ? 'recolher menu' : 'abrir menu'}</span>
             </button>
+            <div className="breadcrumb" aria-label="Navegação atual">
+              <span>workspace</span><span>/</span><strong>{tela === 'inicio' ? 'visão geral' : 'cadastros'}</strong>
+            </div>
+            <span className="status-pill"><span className="status-dot" /> sistema online</span>
           </div>
-          <Conteudo />
+          {tela === 'inicio' ? <Conteudo onNavigate={selecionarTela} /> : <CadastroPage tipo={tela} onNavigate={selecionarTela} />}
         </main>
       </div>
-    </>
+    </div>
   )
 }
 
