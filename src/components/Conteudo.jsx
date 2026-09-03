@@ -1,4 +1,6 @@
-function Conteudo({ onNavigate }) {
+import { dashboardData } from "../data/demo/operacao";
+
+function Conteudo({ onNavigate, safraAtual }) {
   return (
     <section className="home-page">
       <div className="home-topline">
@@ -21,15 +23,15 @@ function Conteudo({ onNavigate }) {
       <div className="operation-context">
         <div>
           <span className="mini-label">safra em contexto</span>
-          <strong>safra 2026/27</strong>
-          <span>ciclo produtivo principal</span>
+          <strong>{safraAtual.nome}</strong>
+          <span>{safraAtual.descricao}</span>
         </div>
         <div className="context-progress">
-          <span>configuração inicial</span>
+          <span>{safraAtual.status}</span>
           <div>
-            <i style={{ width: "38%" }} />
+            <i style={{ width: `${safraAtual.progresso}%` }} />
           </div>
-          <strong>38%</strong>
+          <strong>{safraAtual.progresso}%</strong>
         </div>
         <button
           className="text-button"
@@ -42,21 +44,25 @@ function Conteudo({ onNavigate }) {
       <div className="metric-row">
         <div className="metric-card">
           <span className="metric-label">entidades do domínio</span>
-          <strong>07</strong>
-          <span className="metric-caption">cadastros disponíveis</span>
+          <strong>{dashboardData.metricas[0].valor}</strong>
+          <span className="metric-caption">
+            {dashboardData.metricas[0].legenda}
+          </span>
         </div>
         <div className="metric-card accent">
           <span className="metric-label">atenção necessária</span>
-          <strong>01</strong>
-          <span className="metric-caption">configuração pendente</span>
+          <strong>{dashboardData.metricas[1].valor}</strong>
+          <span className="metric-caption">
+            {dashboardData.metricas[1].legenda}
+          </span>
         </div>
         <div className="signal-card">
           <div>
             <span className="metric-label">sinal da operação</span>
-            <strong>base em construção</strong>
+            <strong>{dashboardData.sinais.titulo}</strong>
           </div>
           <span className="signal-indicator">
-            <i /> estável
+            <i /> leitura pendente
           </span>
         </div>
       </div>
@@ -88,29 +94,27 @@ function Conteudo({ onNavigate }) {
               <h2>linha do tempo</h2>
             </div>
             <span className="live-label">
-              <i /> agora
+              <i /> dados locais
             </span>
           </div>
-          <div className="activity-item">
-            <span className="activity-marker done">✓</span>
-            <div>
-              <strong>ambiente iniciado</strong>
-              <small>estrutura pronta para novos registros</small>
+          {dashboardData.atividade.map((evento, index) => (
+            <div className="activity-item" key={evento.titulo}>
+              <span
+                className={`activity-marker ${evento.estado === "concluído" ? "done" : ""}`}
+              >
+                {evento.estado === "concluído" ? "✓" : `0${index + 2}`}
+              </span>
+              <div>
+                <strong>{evento.titulo}</strong>
+                <small>{evento.detalhe}</small>
+              </div>
+              <time>{evento.quando}</time>
             </div>
-            <time>agora</time>
-          </div>
-          <div className="activity-item">
-            <span className="activity-marker">02</span>
-            <div>
-              <strong>próximo: cadastrar unidade</strong>
-              <small>adicione o primeiro ponto da operação</small>
-            </div>
-            <time>pendente</time>
-          </div>
+          ))}
         </div>
       </div>
     </section>
   );
 }
 
-export default Conteudo
+export default Conteudo;

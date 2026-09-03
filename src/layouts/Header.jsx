@@ -1,4 +1,6 @@
-function Header() {
+import ContextSelector from "../components/common/ContextSelector";
+
+function Header({ safraAtual, safras, onChangeSafra }) {
   return (
     <header className="app-header">
       <div className="header-left">
@@ -7,14 +9,15 @@ function Header() {
         <span className="header-title">inteligência agrícola</span>
       </div>
       <div className="header-right">
-        <span className="header-time">terça, 27 ago 2026</span>
-        <span className="sync-status">
-          <i /> dados locais
-        </span>
+        <ContextSelector
+          safraAtual={safraAtual}
+          safras={safras}
+          onChange={onChangeSafra}
+        />
         <span className="header-avatar">ps</span>
       </div>
     </header>
   );
 }
 
-export default Header
+export default Header;
