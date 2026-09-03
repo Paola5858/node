@@ -1,3 +1,26 @@
+# Projeto Front
+
+## Comandos do projeto
+
+```bash
+npm install
+npm run dev
+npm test
+npm run lint
+npm run build
+```
+
+Os testes do fluxo de cadastro ficam em `src/pages/CadastroPage.test.jsx`. Variaveis de ambiente para integracoes devem ser documentadas em `.env.example` e usar o prefixo `VITE_`.
+
+## Organizacao
+
+- `src/pages/`: telas completas da aplicacao.
+- `src/layouts/`: componentes de composicao estrutural, como cabecalho e menu lateral.
+- `src/components/`: componentes de interface reutilizaveis.
+- `.github/workflows/ci.yml`: valida testes, lint e build em pushes para `main` e pull requests.
+
+---
+
 # React + Vite
 
 This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
