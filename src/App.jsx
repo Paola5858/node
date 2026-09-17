@@ -3,7 +3,10 @@ import Header from "./layouts/Header";
 import MenuLateral from "./layouts/MenuLateral";
 import Conteudo from "./components/Conteudo";
 import CadastroPage from "./pages/CadastroPage";
+import UsuariosPage from "./pages/UsuariosPage";
+import LoginPage from "./pages/LoginPage";
 import { safrasDisponiveis } from "./data/demo/operacao";
+import { encerrarSessao, lerSessao } from "./data/storage";
 import "./App.css";
 
 const cadastroRoutes = [
@@ -25,6 +28,7 @@ function App() {
   const [menuAberto, setMenuAberto] = useState(true);
   const [rota, setRota] = useState(rotaAtual);
   const [safraId, setSafraId] = useState(safrasDisponiveis[0].id);
+  const [sessao, setSessao] = useState(lerSessao);
 
   useEffect(() => {
     const atualizarRota = () => setRota(rotaAtual());
@@ -45,6 +49,12 @@ function App() {
     );
     setRota(destino);
     if (window.innerWidth < 900) setMenuAberto(false);
+  }
+
+  function sair() {
+    encerrarSessao();
+    setSessao(null);
+    navegar("login");
   }
 
   const safraAtual =
@@ -71,6 +81,8 @@ function App() {
         safraAtual={safraAtual}
         safras={safrasDisponiveis}
         onChangeSafra={setSafraId}
+        sessao={sessao}
+        onLogout={sair}
       />
       <div className="layout">
         <MenuLateral aberto={menuAberto} telaAtual={rota} setTela={navegar} />
@@ -96,7 +108,11 @@ function App() {
               <span className="status-dot" /> dados locais
             </span>
           </div>
-          {rota === "visao-geral" ? (
+          {rota === "login" ? (
+            <LoginPage onAuthenticated={(novaSessao) => { setSessao(novaSessao); navegar("visao-geral"); }} onNavigate={navegar} />
+          ) : rota === "usuarios" ? (
+            <UsuariosPage onNavigate={navegar} />
+          ) : rota === "visao-geral" ? (
             <Conteudo onNavigate={navegar} safraAtual={safraAtual} />
           ) : paginaCadastro ? (
             <CadastroPage key={rota} tipo={rota} />

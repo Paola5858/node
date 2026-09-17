@@ -27,6 +27,8 @@ const grupos = [
     itens: [
       ["tipoinformacao", "tipos de informação"],
       ["unidademedida", "unidades de medida"],
+      ["usuarios", "usuário e foto"],
+      ["login", "entrar na conta"],
     ],
   },
 ];

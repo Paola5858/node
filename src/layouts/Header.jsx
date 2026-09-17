@@ -1,6 +1,6 @@
 import ContextSelector from "../components/common/ContextSelector";
 
-function Header({ safraAtual, safras, onChangeSafra }) {
+function Header({ safraAtual, safras, onChangeSafra, sessao, onLogout }) {
   return (
     <header className="app-header">
       <div className="header-left">
@@ -14,7 +14,15 @@ function Header({ safraAtual, safras, onChangeSafra }) {
           safras={safras}
           onChange={onChangeSafra}
         />
-        <span className="header-avatar">ps</span>
+        {sessao ? (
+          <>
+            <span className="header-session">{sessao.nome}</span>
+            <button className="header-logout" type="button" onClick={onLogout}>sair</button>
+            <span className="header-avatar">{sessao.nome.slice(0, 2).toLowerCase()}</span>
+          </>
+        ) : (
+          <span className="header-login">acesso local</span>
+        )}
       </div>
     </header>
   );
