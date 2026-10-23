@@ -1,12 +1,17 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { indicadorService, normalizarIndicador } from '../services/indicadorService'
 import VisualizarIndicador from '../components/VisualizarIndicador'
+import { authService } from '../services/authService'
 
 const vazio = { Nome: '', Descricao: '', Url: '' }
 const favoritosKey = 'plume.indicadores.favoritos'
 
-function lerFavoritos() {
+function lerFavoritosLegados() {
   try { return JSON.parse(localStorage.getItem(favoritosKey) || '[]') } catch { return [] }
+}
+
+function lerFavoritos(sessao) {
+  return sessao?.favoritos?.length ? sessao.favoritos : lerFavoritosLegados()
 }
 
 function validar(form) {
@@ -17,7 +22,10 @@ function validar(form) {
   else {
     try {
       const url = new URL(form.Url)
-      if (!['http:', 'https:'].includes(url.protocol)) erros.Url = 'use uma URL iniciando com http:// ou https://'
+      const guid = /^[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}$/i
+      if (url.protocol !== 'https:' || url.hostname !== 'app.powerbi.com' || url.pathname !== '/reportEmbed' || !guid.test(url.searchParams.get('reportId') || '') || !guid.test(url.searchParams.get('ctid') || '')) {
+        erros.Url = 'use a URL reportEmbed do Power BI com reportId e ctid válidos'
+      }
     } catch { erros.Url = 'informe uma URL válida' }
   }
   return erros
@@ -30,13 +38,15 @@ function normalizarTexto(txt) {
     .toLowerCase()
 }
 
-function IndicadoresPage({ initialSelectedId, onItemsChange, onSelect }) {
+function IndicadoresPage({ sessao, initialSelectedId, onItemsChange, onSelect }) {
   const [itens, setItens] = useState([])
   const [form, setForm] = useState(vazio)
   const [idEdicao, setIdEdicao] = useState(null)
   const [selecionado, setSelecionado] = useState(null)
   const [busca, setBusca] = useState('')
-  const [favoritos, setFavoritos] = useState(lerFavoritos)
+  const [favoritosLocais, setFavoritosLocais] = useState(() => lerFavoritos(sessao))
+  const favoritos = sessao?.favoritos?.length ? sessao.favoritos : favoritosLocais
+  const [salvandoFavorito, setSalvandoFavorito] = useState(false)
   const [estado, setEstado] = useState('carregando')
   const [erro, setErro] = useState('')
   const [mensagem, setMensagem] = useState('')
@@ -82,6 +92,22 @@ function IndicadoresPage({ initialSelectedId, onItemsChange, onSelect }) {
   }, [onItemsChange, onSelect])
 
   useEffect(() => { Promise.resolve().then(carregar) }, [carregar])
+
+  useEffect(() => {
+    if (!sessao || estado !== 'pronto') return
+    const legados = lerFavoritosLegados()
+    const atuais = sessao.favoritos || []
+    if (atuais.length) {
+      localStorage.removeItem(favoritosKey)
+      return
+    }
+    const migrados = legados.filter((id) => itens.some((item) => String(item.Id) === String(id)))
+    localStorage.removeItem(favoritosKey)
+    if (!migrados.length) return
+    authService.atualizarPerfil({ favoritos: migrados })
+      .then((data) => window.dispatchEvent(new CustomEvent('plume:profile-updated', { detail: data.user })))
+      .catch((error) => setErro(`não foi possível salvar seus favoritos na conta: ${error.message}`))
+  }, [sessao, estado, itens])
 
   // Sincroniza a seleção quando initialSelectedId muda (clique no menu lateral)
   // sem disparar uma nova chamada à API.
@@ -154,7 +180,7 @@ function IndicadoresPage({ initialSelectedId, onItemsChange, onSelect }) {
     setErro('')
     try {
       await indicadorService.excluir(item.Id)
-      setFavoritos((atual) => atual.filter((id) => String(id) !== String(item.Id)))
+      setFavoritosLocais((atual) => atual.filter((id) => String(id) !== String(item.Id)))
       // carregar() já remove o item excluído da lista e limpa selecionado caso
       // o item deletado fosse o selecionado (F-07).
       await carregar()
@@ -162,14 +188,25 @@ function IndicadoresPage({ initialSelectedId, onItemsChange, onSelect }) {
     } catch (error) { setErro(error.message) } finally { setExcluindo(null) }
   }
 
-  function alternarFavorito(id) {
-    setFavoritos((atual) => {
-      const proximo = atual.some((item) => String(item) === String(id))
-        ? atual.filter((item) => String(item) !== String(id))
-        : [...atual, id]
-      localStorage.setItem(favoritosKey, JSON.stringify(proximo))
-      return proximo
-    })
+  async function alternarFavorito(id) {
+    const anteriores = favoritos
+    const proximo = anteriores.some((item) => String(item) === String(id))
+      ? anteriores.filter((item) => String(item) !== String(id))
+      : [...anteriores, id]
+    setFavoritosLocais(proximo)
+    if (!sessao) { localStorage.setItem(favoritosKey, JSON.stringify(proximo)); return }
+    setSalvandoFavorito(true)
+    try {
+      const data = await authService.atualizarPerfil({ favoritos: proximo })
+      setFavoritosLocais(data.user.favoritos)
+      localStorage.removeItem(favoritosKey)
+      window.dispatchEvent(new CustomEvent('plume:profile-updated', { detail: data.user }))
+    } catch (error) {
+      setFavoritosLocais(anteriores)
+      setErro(`não foi possível salvar o favorito: ${error.message}`)
+    } finally {
+      setSalvandoFavorito(false)
+    }
   }
 
   return (
@@ -212,7 +249,7 @@ function IndicadoresPage({ initialSelectedId, onItemsChange, onSelect }) {
             <div className="indicator-state">
               <span className="loading-bar" />
               <strong>consultando sua API...</strong>
-              <small>buscando indicadores no Node-RED.</small>
+              <small>buscando indicadores na API do Plume.</small>
             </div>
           )}
 
@@ -248,6 +285,7 @@ function IndicadoresPage({ initialSelectedId, onItemsChange, onSelect }) {
                   <button
                     className={`favorite-button ${favoritos.some((id) => String(id) === String(item.Id)) ? 'is-favorite' : ''}`}
                     type="button"
+                    disabled={salvandoFavorito}
                     onClick={(event) => { event.stopPropagation(); alternarFavorito(item.Id) }}
                     aria-label="Alternar favorito"
                   >
@@ -329,7 +367,7 @@ function IndicadoresPage({ initialSelectedId, onItemsChange, onSelect }) {
 
             <div className={`field ${erros.Url ? 'has-error' : ''}`}>
               <label htmlFor="Url">URL do painel<span>*</span></label>
-              <input id="Url" name="Url" type="url" value={form.Url} onChange={alterar} placeholder="https://app.powerbi.com/view?r=..." />
+              <input id="Url" name="Url" type="url" value={form.Url} onChange={alterar} placeholder="https://app.powerbi.com/reportEmbed?reportId=...&ctid=..." />
               {erros.Url && <small className="field-error">{erros.Url}</small>}
             </div>
 

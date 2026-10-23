@@ -75,6 +75,12 @@ function App() {
     return () => window.removeEventListener("popstate", atualizarRota);
   }, []);
 
+  useEffect(() => {
+    const atualizarPerfil = (event) => setSessao((atual) => atual ? { ...atual, ...event.detail } : atual);
+    window.addEventListener("plume:profile-updated", atualizarPerfil);
+    return () => window.removeEventListener("plume:profile-updated", atualizarPerfil);
+  }, []);
+
   function alterarMenu() {
     setMenuAberto((aberto) => !aberto);
   }
@@ -159,8 +165,8 @@ function App() {
               <span>/</span>
               <strong>{tituloRota}</strong>
             </div>
-            <span className="status-pill" title="Fonte local demonstrativa">
-              <span className="status-dot" /> dados locais
+            <span className="status-pill" title="Dados estáticos de demonstração, não leituras reais da operação">
+              <span className="status-dot" /> dados de demonstração
             </span>
           </div>
           {estadoSessao === "verificando" ? (
@@ -173,6 +179,7 @@ function App() {
             <UsuariosPage onNavigate={navegar} />
           ) : rota === "indicadores" ? (
             <IndicadoresPage
+              sessao={sessao}
               initialSelectedId={indicadorSelecionado?.Id}
               onItemsChange={atualizarIndicadores}
               onSelect={setIndicadorSelecionado}

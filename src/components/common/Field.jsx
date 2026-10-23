@@ -7,7 +7,10 @@ function Field({ name, label, type, placeholder, options, value, error, onChange
       {options ? (
         <select id={name} name={name} value={value} onChange={onChange} aria-invalid={Boolean(error)}>
           <option value="">{placeholder}</option>
-          {options.map((option) => <option key={option} value={option}>{option}</option>)}
+          {options.map((option) => {
+            const item = typeof option === 'object' ? option : { value: option, label: option }
+            return <option key={item.value} value={item.value}>{item.label}</option>
+          })}
         </select>
       ) : (
         <input id={name} name={name} type={type} value={value} onChange={onChange} placeholder={placeholder} aria-invalid={Boolean(error)} />

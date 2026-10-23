@@ -2,7 +2,7 @@ import React, { useState } from 'react'
 import { authService } from '../services/authService'
 
 function UsuariosPage({ onNavigate }) {
-  const [valores, setValores] = useState({ nome: '', email: '', senha: '', confirmarSenha: '' })
+  const [valores, setValores] = useState({ nome: '', organizationName: '', email: '', senha: '', confirmarSenha: '' })
   const [erro, setErro] = useState('')
   const [mensagem, setMensagem] = useState('')
   const [salvando, setSalvando] = useState(false)
@@ -15,15 +15,15 @@ function UsuariosPage({ onNavigate }) {
 
   async function salvar(event) {
     event.preventDefault()
-    if (!valores.nome.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(valores.email)) return setErro('informe nome e um e-mail válido.')
+    if (!valores.nome.trim() || !valores.organizationName.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(valores.email)) return setErro('informe nome, organização e um e-mail válido.')
     if (valores.senha.length < 12) return setErro('use uma senha com pelo menos 12 caracteres.')
     if (valores.senha !== valores.confirmarSenha) return setErro('as senhas não coincidem.')
     setSalvando(true)
     setErro('')
     try {
       await authService.cadastrar({ nome: valores.nome.trim(), email: valores.email.trim().toLowerCase(), senha: valores.senha })
-      setMensagem('o servidor confirmou o cadastro. você já pode entrar.')
-      setValores({ nome: '', email: '', senha: '', confirmarSenha: '' })
+      setMensagem('organização e conta do responsável criadas no servidor. entre para iniciar uma sessão.')
+      setValores({ nome: '', organizationName: '', email: '', senha: '', confirmarSenha: '' })
     } catch (error) {
       setErro(error.message)
     } finally {
@@ -38,6 +38,7 @@ function UsuariosPage({ onNavigate }) {
       {erro && <div className="error-feedback" role="alert">{erro}</div>}
       <form onSubmit={salvar} noValidate><div className="form-grid">
         <div className="field"><label htmlFor="nome">nome<span>*</span></label><input id="nome" name="nome" autoComplete="name" value={valores.nome} onChange={atualizar} required /></div>
+        <div className="field"><label htmlFor="organizationName">organização / usina<span>*</span></label><input id="organizationName" name="organizationName" autoComplete="organization" value={valores.organizationName} onChange={atualizar} required /></div>
         <div className="field"><label htmlFor="email">e-mail<span>*</span></label><input id="email" name="email" type="email" autoComplete="email" value={valores.email} onChange={atualizar} required /></div>
         <div className="field"><label htmlFor="senha">senha<span>*</span></label><input id="senha" name="senha" type="password" autoComplete="new-password" value={valores.senha} onChange={atualizar} required /></div>
         <div className="field"><label htmlFor="confirmarSenha">confirmar senha<span>*</span></label><input id="confirmarSenha" name="confirmarSenha" type="password" autoComplete="new-password" value={valores.confirmarSenha} onChange={atualizar} required /></div>

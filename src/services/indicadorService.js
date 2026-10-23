@@ -1,3 +1,5 @@
+import { apiFetch } from './sessionToken'
+
 const apiBase = (import.meta.env.VITE_API_URL || '/api').replace(/\/$/, '')
 const endpoint = `${apiBase}/indicador`
 const TIMEOUT_MS = 10_000
@@ -11,7 +13,7 @@ async function requisicao(url, opcoes = {}) {
   else sinalExterno?.addEventListener('abort', abortar, { once: true })
 
   try {
-    const resposta = await fetch(url, {
+    const resposta = await apiFetch(url, {
       ...opcoes,
       signal: controller.signal,
       headers: {
@@ -41,12 +43,12 @@ async function requisicao(url, opcoes = {}) {
   } catch (e) {
     if (sinalExterno?.aborted) throw e
     if (controller.signal.aborted || e?.name === 'AbortError') {
-      throw new Error(`a API não respondeu em ${TIMEOUT_MS / 1000} s. verifique se o Node-RED está ativo.`)
+      throw new Error(`a API não respondeu em ${TIMEOUT_MS / 1000} s. verifique se o servidor do Plume está ativo.`)
     }
     if (e instanceof SyntaxError) throw e
     if (e instanceof Error && (e.message.startsWith('erro HTTP ') || e.message === 'a API respondeu um conteúdo inválido. confira a rota /api/indicador.')) throw e
     if (e instanceof TypeError) {
-      throw new Error('não foi possível conectar à API de indicadores. verifique se o Node-RED está ativo.')
+      throw new Error('não foi possível conectar à API de indicadores. verifique se o servidor do Plume está ativo.')
     }
     throw e
   } finally {

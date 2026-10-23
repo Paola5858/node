@@ -1,21 +1,26 @@
-import React, { useState } from 'react'
+import React, { useRef, useState } from 'react'
+
+function urlPowerBiValida(value) {
+  try {
+    const url = new URL(value)
+    const guid = /^[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}$/i
+    return url.protocol === 'https:' && url.hostname === 'app.powerbi.com' && url.pathname === '/reportEmbed' &&
+      guid.test(url.searchParams.get('reportId') || '') && guid.test(url.searchParams.get('ctid') || '')
+  } catch { return false }
+}
 
 function VisualizarIndicador({ indicador, onVoltar }) {
   const [documentoCarregado, setDocumentoCarregado] = useState(null)
+  const [foco, setFoco] = useState(false)
+  const viewerRef = useRef(null)
   const url = indicador?.Url || ''
   const identidade = `${indicador?.Id ?? ''}:${url}`
   const carregando = documentoCarregado !== identidade
-  let segura = false
-  try { segura = ['http:', 'https:'].includes(new URL(url).protocol) } catch { segura = false }
-  let linkPublicoPowerBi = false
-  try {
-    const destino = new URL(url)
-    linkPublicoPowerBi = destino.hostname === 'app.powerbi.com' && destino.pathname === '/view' && destino.searchParams.has('r')
-  } catch { /* URL inválida é tratada abaixo */ }
+  const segura = urlPowerBiValida(url)
 
   if (!segura) {
     return (
-      <section className="panel-viewer glass-card">
+      <section className={`panel-viewer glass-card ${foco ? 'focus-mode' : ''}`} ref={viewerRef}>
         <div className="viewer-heading">
           <div>
             <span className="mini-label">painel selecionado</span>
@@ -36,7 +41,7 @@ function VisualizarIndicador({ indicador, onVoltar }) {
   }
 
   return (
-    <section className="panel-viewer glass-card">
+    <section className={`panel-viewer glass-card ${foco ? 'focus-mode' : ''}`} ref={viewerRef}>
       <div className="viewer-heading">
         <div>
           <span className="mini-label">painel selecionado</span>
@@ -44,6 +49,12 @@ function VisualizarIndicador({ indicador, onVoltar }) {
           <p>{indicador.Descricao}</p>
         </div>
         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+          <button className="button-ghost" type="button" onClick={() => setFoco((ativo) => !ativo)} aria-pressed={foco}>
+            {foco ? 'sair do modo de foco' : 'modo de foco'}
+          </button>
+          <button className="button-ghost" type="button" onClick={() => viewerRef.current?.requestFullscreen?.()} disabled={!document.fullscreenEnabled}>
+            tela cheia
+          </button>
           {onVoltar && (
             <button className="button-ghost" type="button" onClick={onVoltar}>
               voltar para a lista
@@ -67,6 +78,7 @@ function VisualizarIndicador({ indicador, onVoltar }) {
           title={`Painel ${indicador.Nome}`}
           src={url}
           sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
+          allow="fullscreen"
           allowFullScreen
           referrerPolicy="strict-origin-when-cross-origin"
           onLoad={() => setDocumentoCarregado(identidade)}
@@ -76,7 +88,6 @@ function VisualizarIndicador({ indicador, onVoltar }) {
       <small className="viewer-note">
         o navegador informa apenas que o documento do iframe carregou; isso não confirma que o relatório está disponível. O conteúdo pode exigir autenticação, permissão ou configuração de incorporação compatível. Se não aparecer, abra o endereço em uma nova aba.
       </small>
-      {linkPublicoPowerBi && <div className="error-feedback" role="note"><strong>atenção: link público do Power BI.</strong><span>O formato /view?r= corresponde a Publicar na Web. Qualquer pessoa na internet pode acessar o relatório sem autenticação; não use para dados confidenciais.</span></div>}
     </section>
   )
 }

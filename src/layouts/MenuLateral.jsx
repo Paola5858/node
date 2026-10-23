@@ -112,7 +112,7 @@ function MenuLateral({ aberto, telaAtual, setTela, indicadores = [], onSelectInd
       </nav>
       <div className="sidebar-bottom">
         <div className="profile-card">
-          <span className="avatar">{String(nomeUsuario).slice(0, 2).toLowerCase()}</span>
+          {sessao?.foto ? <img className="avatar" src={sessao.foto} alt="" /> : <span className="avatar">{String(nomeUsuario).slice(0, 2).toLowerCase()}</span>}
           <div>
             <strong>{nomeUsuario}</strong>
             <small>{sessao ? "sessão autorizada" : "sem sessão"}</small>

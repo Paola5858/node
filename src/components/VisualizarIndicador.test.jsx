@@ -3,7 +3,7 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import VisualizarIndicador from './VisualizarIndicador'
 
-const primeiro = { Id: 1, Nome: 'Produção', Descricao: 'Painel A', Url: 'https://app.powerbi.com/report-a' }
+const primeiro = { Id: 1, Nome: 'Produção', Descricao: 'Painel A', Url: 'https://app.powerbi.com/reportEmbed?reportId=22450b7a-e0c7-4472-a33a-becc7adaa99e&ctid=b1051c4b-3b94-41ab-9441-e73a72342fdd' }
 
 describe('VisualizarIndicador', () => {
   it('reinicia o estado do documento ao trocar a identidade e a URL do indicador', () => {
@@ -11,9 +11,10 @@ describe('VisualizarIndicador', () => {
     fireEvent.load(screen.getByTitle('Painel Produção'))
     expect(screen.queryByRole('status')).not.toBeInTheDocument()
 
-    rerender(<VisualizarIndicador indicador={{ ...primeiro, Id: 2, Nome: 'Eficiência', Url: 'https://app.powerbi.com/report-b' }} />)
+    const proximaUrl = 'https://app.powerbi.com/reportEmbed?reportId=11111111-1111-4111-8111-111111111111&ctid=b1051c4b-3b94-41ab-9441-e73a72342fdd'
+    rerender(<VisualizarIndicador indicador={{ ...primeiro, Id: 2, Nome: 'Eficiência', Url: proximaUrl }} />)
     expect(screen.getByRole('status')).toHaveTextContent(/aguardando o documento/i)
-    expect(screen.getByTitle('Painel Eficiência')).toHaveAttribute('src', 'https://app.powerbi.com/report-b')
+    expect(screen.getByTitle('Painel Eficiência')).toHaveAttribute('src', proximaUrl)
   })
 
   it('não trata onLoad como confirmação de disponibilidade do relatório e oferece abertura externa', () => {

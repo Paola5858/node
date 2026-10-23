@@ -85,7 +85,7 @@ describe('indicadorService', () => {
     const requisicao = indicadorService.listar()
     const resultado = requisicao.then((valor) => valor, (erro) => erro)
     await vi.advanceTimersByTimeAsync(10_000)
-    expect(await resultado).toHaveProperty('message', 'a API não respondeu em 10 s. verifique se o Node-RED está ativo.')
+    expect(await resultado).toHaveProperty('message', 'a API não respondeu em 10 s. verifique se o servidor do Plume está ativo.')
     vi.useRealTimers()
   })
 

@@ -1,9 +1,10 @@
+import { apiFetch, guardarCsrfToken } from './sessionToken'
+
 const apiBase = (import.meta.env.VITE_API_URL || '/api').replace(/\/$/, '')
 
 async function requisicaoAuth(caminho, opcoes = {}) {
-  const resposta = await fetch(`${apiBase}${caminho}`, {
+  const resposta = await apiFetch(`${apiBase}${caminho}`, {
     ...opcoes,
-    credentials: 'include',
     headers: {
       Accept: 'application/json',
       ...(opcoes.body ? { 'Content-Type': 'application/json' } : {}),
@@ -22,11 +23,10 @@ async function requisicaoAuth(caminho, opcoes = {}) {
     }
     throw new Error(dados?.message || dados?.erro || 'não foi possível validar a sessão com o servidor.')
   }
+  if (Object.hasOwn(dados || {}, 'csrfToken')) guardarCsrfToken(dados.csrfToken)
   return dados
 }
 
-// Contrato preparado, ainda não comprovado: backend deve manter cookie HttpOnly,
-// Secure em HTTPS, SameSite adequado, CSRF e autorização para cada recurso.
 export const authService = {
   async sessao() {
     const dados = await requisicaoAuth('/auth/session')
@@ -34,12 +34,16 @@ export const authService = {
   },
   async entrar(email, senha) {
     const dados = await requisicaoAuth('/auth/login', { method: 'POST', body: JSON.stringify({ email, senha }) })
-    return dados?.user || null
+    const sessao = await requisicaoAuth('/auth/session')
+    return sessao?.user || dados?.user || null
   },
-  async cadastrar(usuario) {
+  cadastrar(usuario) {
     return requisicaoAuth('/auth/register', { method: 'POST', body: JSON.stringify(usuario) })
   },
-  async sair() {
+  sair() {
     return requisicaoAuth('/auth/logout', { method: 'POST' })
+  },
+  atualizarPerfil(perfil) {
+    return requisicaoAuth('/auth/profile', { method: 'PATCH', body: JSON.stringify(perfil) })
   },
 }

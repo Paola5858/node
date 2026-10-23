@@ -1,10 +1,11 @@
 import React from 'react'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import CadastroPage from './CadastroPage'
 
 describe('CadastroPage', () => {
+  afterEach(() => vi.unstubAllGlobals())
   it('mostra os campos obrigatorios ao tentar salvar vazio', async () => {
     const user = userEvent.setup()
     render(<CadastroPage tipo="safra" onNavigate={() => {}} />)
@@ -29,7 +30,10 @@ describe('CadastroPage', () => {
     expect(screen.getByText('a data final deve ser depois da inicial')).toBeInTheDocument()
   })
 
-  it('não anuncia sucesso quando não existe API de persistência', async () => {
+  it('não anuncia sucesso quando a API recusa o cadastro', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((_url, options = {}) => options.method
+      ? Promise.resolve(new Response(JSON.stringify({ message: 'autenticação necessária.' }), { status: 401 }))
+      : Promise.resolve(new Response('[]', { status: 200 }))))
     const user = userEvent.setup()
     render(<CadastroPage tipo="safra" onNavigate={() => {}} />)
 
@@ -39,6 +43,6 @@ describe('CadastroPage', () => {
     await user.upload(screen.getByLabelText(/imagem da safra/i), new File(['imagem'], 'safra.png', { type: 'image/png' }))
     await user.click(screen.getByRole('button', { name: /cadastrar registro/i }))
 
-    expect(screen.getByRole('alert')).toHaveTextContent('registro não salvo: a API de persistência para safra não está disponível')
+    expect(screen.getByRole('alert')).toHaveTextContent('registro não salvo: autenticação necessária.')
   })
 })
