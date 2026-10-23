@@ -33,7 +33,7 @@ const grupos = [
   },
 ];
 
-function MenuLateral({ aberto, telaAtual, setTela }) {
+function MenuLateral({ aberto, telaAtual, setTela, indicadores = [], onSelectIndicator }) {
   return (
     <aside
       className={`menu-lateral ${aberto ? "aberto" : "fechado"}`}
@@ -78,6 +78,22 @@ function MenuLateral({ aberto, telaAtual, setTela }) {
                 <span className="nav-arrow">›</span>
               </button>
             ))}
+            {grupo.titulo === "inteligência" && indicadores.length > 0 && (
+              <div className="sidebar-dynamic-items" aria-label="Indicadores cadastrados">
+                {indicadores.map((indicador) => (
+                  <button
+                    className={`nav-item nav-item-dynamic ${telaAtual === "indicadores" ? "ativo" : ""}`}
+                    type="button"
+                    key={indicador.Id}
+                    title={indicador.Descricao}
+                    onClick={() => { onSelectIndicator?.(indicador); setTela("indicadores") }}
+                  >
+                    <span className="nav-glyph" aria-hidden="true">↳</span>
+                    <span>{indicador.Nome}</span>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         ))}
       </nav>

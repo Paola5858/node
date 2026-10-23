@@ -5,8 +5,10 @@ import Conteudo from "./components/Conteudo";
 import CadastroPage from "./pages/CadastroPage";
 import UsuariosPage from "./pages/UsuariosPage";
 import LoginPage from "./pages/LoginPage";
+import IndicadoresPage from "./pages/IndicadoresPage";
 import { safrasDisponiveis } from "./data/demo/operacao";
 import { encerrarSessao, lerSessao } from "./data/storage";
+import { indicadorService, normalizarIndicador } from "./services/indicadorService";
 import "./App.css";
 
 const cadastroRoutes = [
@@ -29,6 +31,12 @@ function App() {
   const [rota, setRota] = useState(rotaAtual);
   const [safraId, setSafraId] = useState(safrasDisponiveis[0].id);
   const [sessao, setSessao] = useState(lerSessao);
+  const [indicadores, setIndicadores] = useState([]);
+  const [indicadorSelecionado, setIndicadorSelecionado] = useState(null);
+
+  useEffect(() => {
+    indicadorService.listar().then((dados) => setIndicadores(dados.map(normalizarIndicador))).catch(() => setIndicadores([]));
+  }, []);
 
   useEffect(() => {
     const atualizarRota = () => setRota(rotaAtual());
@@ -85,7 +93,7 @@ function App() {
         onLogout={sair}
       />
       <div className="layout">
-        <MenuLateral aberto={menuAberto} telaAtual={rota} setTela={navegar} />
+        <MenuLateral aberto={menuAberto} telaAtual={rota} setTela={navegar} indicadores={indicadores} onSelectIndicator={setIndicadorSelecionado} />
         <main className="area-conteudo">
           <div className="content-toolbar">
             <button
@@ -112,6 +120,8 @@ function App() {
             <LoginPage onAuthenticated={(novaSessao) => { setSessao(novaSessao); navegar("visao-geral"); }} onNavigate={navegar} />
           ) : rota === "usuarios" ? (
             <UsuariosPage onNavigate={navegar} />
+          ) : rota === "indicadores" ? (
+            <IndicadoresPage initialSelectedId={indicadorSelecionado?.Id} onItemsChange={setIndicadores} />
           ) : rota === "visao-geral" ? (
             <Conteudo onNavigate={navegar} safraAtual={safraAtual} />
           ) : paginaCadastro ? (
