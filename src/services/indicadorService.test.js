@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { indicadorService, normalizarIndicador } from './indicadorService'
 
-afterEach(() => vi.restoreAllMocks())
+afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks() })
 
 describe('indicadorService', () => {
   it('lista indicadores e normaliza formatos de resposta', async () => {
@@ -66,5 +66,40 @@ describe('indicadorService', () => {
     abortErr.name = 'AbortError'
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(abortErr))
     await expect(indicadorService.listar()).rejects.toThrow('a API não respondeu em 10 s')
+  })
+
+  it('mantém o timeout ativo enquanto lê o corpo depois dos headers', async () => {
+    vi.useFakeTimers()
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: () => new Promise((_, reject) => {
+        const signal = fetch.mock.calls[0][1].signal
+        signal.addEventListener('abort', () => {
+          const error = new Error('aborted')
+          error.name = 'AbortError'
+          reject(error)
+        }, { once: true })
+      }),
+    }))
+    const requisicao = indicadorService.listar()
+    const resultado = requisicao.then((valor) => valor, (erro) => erro)
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(await resultado).toHaveProperty('message', 'a API não respondeu em 10 s. verifique se o Node-RED está ativo.')
+    vi.useRealTimers()
+  })
+
+  it('propaga cancelamento iniciado pelo chamador', async () => {
+    const controller = new AbortController()
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((_, { signal }) => new Promise((_, reject) => {
+      signal.addEventListener('abort', () => {
+        const error = new Error('aborted')
+        error.name = 'AbortError'
+        reject(error)
+      }, { once: true })
+    })))
+    const requisicao = indicadorService.listar({ signal: controller.signal })
+    controller.abort()
+    await expect(requisicao).rejects.toMatchObject({ name: 'AbortError' })
   })
 })

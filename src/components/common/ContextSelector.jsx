@@ -1,3 +1,5 @@
+import React from "react";
+
 function ContextSelector({ safras, safraAtual, onChange }) {
   return (
     <label className="context-selector">

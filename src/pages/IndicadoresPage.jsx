@@ -4,7 +4,6 @@ import VisualizarIndicador from '../components/VisualizarIndicador'
 
 const vazio = { Nome: '', Descricao: '', Url: '' }
 const favoritosKey = 'plume.indicadores.favoritos'
-const painelPublico = import.meta.env.VITE_POWERBI_PUBLIC_URL || 'https://app.powerbi.com/view?r=eyJrIjoiMzNmMDk2OTktZDljOS00NjE5LWEwNjItNWYwOTgxOTFjMzU0IiwidCI6ImIxMDUxYzRiLTNiOTQtNDFhYi05NDQxLWU3M2E3MjM0MmZkCJ9'
 
 function lerFavoritos() {
   try { return JSON.parse(localStorage.getItem(favoritosKey) || '[]') } catch { return [] }
@@ -49,6 +48,7 @@ function IndicadoresPage({ initialSelectedId, onItemsChange, onSelect }) {
   // efeitos que não devem re-executar ao mudar itens (F-05).
   const itensRef = useRef(itens)
   useEffect(() => { itensRef.current = itens }, [itens])
+  const selecaoPendenteRef = useRef(null)
 
   function selecionarIndicador(item) {
     setSelecionado(item)
@@ -73,8 +73,11 @@ function IndicadoresPage({ initialSelectedId, onItemsChange, onSelect }) {
       })
       setEstado('pronto')
     } catch (error) {
+      selecaoPendenteRef.current = null
       setEstado('erro')
       setErro(error.message)
+      setSelecionado(null)
+      onSelect?.(null)
     }
   }, [onItemsChange, onSelect])
 
@@ -84,11 +87,16 @@ function IndicadoresPage({ initialSelectedId, onItemsChange, onSelect }) {
   // sem disparar uma nova chamada à API.
   useEffect(() => {
     if (initialSelectedId === undefined || initialSelectedId === null) return
-    setSelecionado((atual) => {
-      if (atual && String(atual.Id) === String(initialSelectedId)) return atual
-      return itensRef.current.find((item) => String(item.Id) === String(initialSelectedId)) ?? null
-    })
-  }, [initialSelectedId])
+    if (estado === 'carregando' || estado === 'erro') {
+      selecaoPendenteRef.current = initialSelectedId
+      return
+    }
+    if (estado !== 'pronto') return
+    selecaoPendenteRef.current = null
+    const encontrado = itensRef.current.find((item) => String(item.Id) === String(initialSelectedId)) ?? null
+    setSelecionado(encontrado)
+    onSelect?.(encontrado)
+  }, [initialSelectedId, estado, itens, onSelect])
 
   const filtrados = useMemo(() => {
     const termo = normalizarTexto(busca.trim())
@@ -273,6 +281,7 @@ function IndicadoresPage({ initialSelectedId, onItemsChange, onSelect }) {
           {/* Visualizador do painel selecionado com botão de fechar/retornar à lista (R16) */}
           {selecionado && (
             <VisualizarIndicador
+              key={`${selecionado.Id}:${selecionado.Url}`}
               indicador={selecionado}
               onVoltar={() => selecionarIndicador(null)}
             />
@@ -327,12 +336,9 @@ function IndicadoresPage({ initialSelectedId, onItemsChange, onSelect }) {
             <div className="powerbi-hint">
               <span className="live-dot" />
               <div>
-                <strong>Power BI pronto para uso</strong>
-                <small>use o link público no campo acima.</small>
+                <strong>Incorporação do relatório</strong>
+                <small>Confirme as permissões e a política de compartilhamento antes de usar um link.</small>
               </div>
-              <button type="button" onClick={() => setForm((atual) => ({ ...atual, Url: painelPublico }))}>
-                usar painel enviado
-              </button>
             </div>
 
             <button className="button-primary form-submit" type="submit" disabled={salvando}>

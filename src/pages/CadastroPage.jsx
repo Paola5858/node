@@ -10,7 +10,6 @@ function CadastroPage({ tipo }) {
   const [valores, setValores] = useState(initialState)
   const [erros, setErros] = useState({})
   const [mensagem, setMensagem] = useState('')
-  const [enviado, setEnviado] = useState(false)
   const [imagemSelecionada, setImagemSelecionada] = useState(false)
   const [imageResetSignal, setImageResetSignal] = useState(0)
 
@@ -25,16 +24,14 @@ function CadastroPage({ tipo }) {
     event.preventDefault()
     const novosErros = validarCadastro(config, valores, imagemSelecionada)
     setErros(novosErros)
-    if (Object.keys(novosErros).length) { setMensagem(''); setEnviado(false); return }
-    setMensagem(`${config.title.replace('cadastro de ', '')} cadastrado com sucesso.`)
-    setEnviado(true)
+    if (Object.keys(novosErros).length) { setMensagem(''); return }
+    setMensagem(`registro não salvo: a API de persistência para ${tipo} não está disponível neste repositório.`)
   }
 
   function limpar() {
     setValores(initialState)
     setErros({})
     setMensagem('')
-    setEnviado(false)
     setImagemSelecionada(false)
     setImageResetSignal((signal) => signal + 1)
   }
@@ -57,13 +54,13 @@ function CadastroPage({ tipo }) {
       <div className="form-layout">
         <div className="form-card glass-card">
           <div className="card-heading"><div><span className="mini-label">atributos da classe</span><h2>vamos criar esse registro.</h2></div><span className="required-note">* campos obrigatórios</span></div>
-          {mensagem && <div className="success-feedback" role="status"><span className="success-mark">✓</span><div><strong>tudo certo por aqui.</strong><span>{mensagem}</span></div><button type="button" onClick={() => setMensagem('')} aria-label="Fechar mensagem">×</button></div>}
+          {mensagem && <div className="error-feedback" role="alert"><strong>operação não concluída.</strong><span>{mensagem}</span></div>}
           <form onSubmit={salvar} noValidate>
             <div className="form-grid">
               {config.fields.map(([key, label, type, extra]) => <Field key={key} name={key} label={label} type={type} placeholder={Array.isArray(extra) ? 'selecione uma opção' : extra} options={Array.isArray(extra) ? extra : null} value={valores[key]} error={erros[key]} onChange={atualizarCampo} />)}
             </div>
             <ImageCapture key={imageResetSignal} tipo={tipo} label={config.imagemLabel} required={config.imagemObrigatoria} error={erros.foto} onImageChange={alterarImagem} />
-            <div className="form-footer"><span className="form-hint"><span className="hint-dot" /> câmera e arquivo local disponíveis neste protótipo.</span><div className="form-actions"><button type="button" className="button-ghost" onClick={limpar}>limpar</button><button type="submit" className="button-primary">{enviado ? 'salvo com sucesso' : 'cadastrar registro'} <span>→</span></button></div></div>
+            <div className="form-footer"><span className="form-hint"><span className="hint-dot" /> o cadastro depende de uma API persistente.</span><div className="form-actions"><button type="button" className="button-ghost" onClick={limpar}>limpar</button><button type="submit" className="button-primary">cadastrar registro <span>→</span></button></div></div>
           </form>
         </div>
         <aside className="form-aside"><span className="mini-label">fluxo sugerido</span><div className="aside-orbit"><span className="orbit-dot" /><span className="orbit-line" /><strong>01</strong></div><p>comece pelo essencial. o restante ganha forma a partir daqui.</p></aside>

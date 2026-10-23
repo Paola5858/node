@@ -238,4 +238,33 @@ describe('IndicadoresPage', () => {
     expect(screen.queryByTitle('Painel Produção Diária')).not.toBeInTheDocument()
     expect(onSelect).toHaveBeenLastCalledWith(null)
   })
+
+  it('aplica o indicador solicitado pelo menu quando a primeira resposta ainda estava pendente', async () => {
+    let responder
+    const listarMock = vi.spyOn(indicadorService, 'listar').mockImplementation(() => new Promise((resolve) => { responder = resolve }))
+    const onSelect = vi.fn()
+    function Harness() {
+      const [id, setId] = React.useState(null)
+      return <><button onClick={() => setId(1)}>abrir indicador do menu</button><IndicadoresPage initialSelectedId={id} onSelect={onSelect} /></>
+    }
+
+    render(<Harness />)
+    await userEvent.click(screen.getByRole('button', { name: /abrir indicador do menu/i }))
+    expect(listarMock).toHaveBeenCalledTimes(1)
+    responder(mockIndicadores)
+
+    await waitFor(() => {
+      expect(screen.getByTitle('Painel Produção Diária')).toBeInTheDocument()
+      expect(onSelect).toHaveBeenCalledWith(mockIndicadores[0])
+    })
+  })
+
+  it('limpa seleção externa cujo indicador não está na resposta da API', async () => {
+    vi.spyOn(indicadorService, 'listar').mockResolvedValue(mockIndicadores)
+    const onSelect = vi.fn()
+    render(<IndicadoresPage initialSelectedId="missing" onSelect={onSelect} />)
+
+    await waitFor(() => expect(screen.getByText('Produção Diária')).toBeInTheDocument())
+    expect(screen.queryByText(/painel selecionado/i)).not.toBeInTheDocument()
+  })
 })

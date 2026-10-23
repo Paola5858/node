@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import Header from "./layouts/Header";
 import MenuLateral from "./layouts/MenuLateral";
 import Conteudo from "./components/Conteudo";
@@ -7,7 +7,8 @@ import UsuariosPage from "./pages/UsuariosPage";
 import LoginPage from "./pages/LoginPage";
 import IndicadoresPage from "./pages/IndicadoresPage";
 import { safrasDisponiveis } from "./data/demo/operacao";
-import { encerrarSessao, lerSessao } from "./data/storage";
+import { authService } from "./services/authService";
+import { removerSenhaLocalLegada } from "./data/storage";
 import { indicadorService, normalizarIndicador } from "./services/indicadorService";
 import "./App.css";
 
@@ -31,7 +32,9 @@ function App() {
   const [menuAberto, setMenuAberto] = useState(true);
   const [rota, setRota] = useState(rotaAtual);
   const [safraId, setSafraId] = useState(safrasDisponiveis[0].id);
-  const [sessao, setSessao] = useState(lerSessao);
+  const [sessao, setSessao] = useState(null);
+  const [estadoSessao, setEstadoSessao] = useState("verificando");
+  const [erroLogout, setErroLogout] = useState("");
   const [indicadores, setIndicadores] = useState([]);
   const [indicadorSelecionado, setIndicadorSelecionado] = useState(null);
 
@@ -44,11 +47,27 @@ function App() {
   }, []);
 
   useEffect(() => {
+    let ativo = true;
+    removerSenhaLocalLegada();
+    authService.sessao().then((usuario) => {
+      if (!ativo) return;
+      setSessao(usuario);
+      setEstadoSessao(usuario ? "autenticado" : "anonimo");
+    }).catch(() => {
+      if (!ativo) return;
+      setSessao(null);
+      setEstadoSessao("anonimo");
+    });
+    return () => { ativo = false; };
+  }, []);
+
+  useEffect(() => {
+    if (estadoSessao !== "autenticado") return;
     indicadorService
       .listar()
       .then((dados) => atualizarIndicadores(dados.map(normalizarIndicador)))
       .catch(() => setIndicadores([]));
-  }, [atualizarIndicadores]);
+  }, [atualizarIndicadores, estadoSessao]);
 
   useEffect(() => {
     const atualizarRota = () => setRota(rotaAtual());
@@ -71,10 +90,16 @@ function App() {
     if (window.innerWidth < 900) setMenuAberto(false);
   }
 
-  function sair() {
-    encerrarSessao();
-    setSessao(null);
-    navegar("login");
+  async function sair() {
+    setErroLogout("");
+    try {
+      await authService.sair();
+      setSessao(null);
+      setEstadoSessao("anonimo");
+      navegar("login");
+    } catch (error) {
+      setErroLogout(`não foi possível encerrar a sessão no servidor: ${error.message}`);
+    }
   }
 
   const safraAtual =
@@ -94,6 +119,7 @@ function App() {
     : rota === "visao-geral"
       ? "visão geral"
       : rota;
+  const rotaPublica = rota === "login" || rota === "usuarios";
 
   return (
     <div className="app-shell">
@@ -110,10 +136,12 @@ function App() {
           telaAtual={rota}
           setTela={navegar}
           indicadores={indicadores}
+          sessao={sessao}
           onSelectIndicator={setIndicadorSelecionado}
           indicadorSelecionadoId={indicadorSelecionado?.Id}
         />
         <main className="area-conteudo">
+          {erroLogout && <div className="error-feedback" role="alert">{erroLogout}</div>}
           <div className="content-toolbar">
             <button
               className="toolbar-button"
@@ -135,8 +163,12 @@ function App() {
               <span className="status-dot" /> dados locais
             </span>
           </div>
-          {rota === "login" ? (
-            <LoginPage onAuthenticated={(novaSessao) => { setSessao(novaSessao); navegar("visao-geral"); }} onNavigate={navegar} />
+          {estadoSessao === "verificando" ? (
+            <div className="indicator-state" role="status"><strong>verificando sessão...</strong><small>aguardando confirmação do servidor.</small></div>
+          ) : !rotaPublica && estadoSessao !== "autenticado" ? (
+            <LoginPage onAuthenticated={(usuario) => { setSessao(usuario); setEstadoSessao("autenticado"); navegar("visao-geral"); }} onNavigate={navegar} />
+          ) : rota === "login" ? (
+            <LoginPage onAuthenticated={(usuario) => { setSessao(usuario); setEstadoSessao("autenticado"); navegar("visao-geral"); }} onNavigate={navegar} />
           ) : rota === "usuarios" ? (
             <UsuariosPage onNavigate={navegar} />
           ) : rota === "indicadores" ? (

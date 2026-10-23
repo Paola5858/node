@@ -4,11 +4,14 @@ const TIMEOUT_MS = 10_000
 
 async function requisicao(url, opcoes = {}) {
   const controller = new AbortController()
+  const sinalExterno = opcoes.signal
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
+  const abortar = () => controller.abort(sinalExterno?.reason)
+  if (sinalExterno?.aborted) abortar()
+  else sinalExterno?.addEventListener('abort', abortar, { once: true })
 
-  let resposta
   try {
-    resposta = await fetch(url, {
+    const resposta = await fetch(url, {
       ...opcoes,
       signal: controller.signal,
       headers: {
@@ -17,33 +20,38 @@ async function requisicao(url, opcoes = {}) {
         ...opcoes.headers,
       },
     })
+    const texto = await resposta.text()
+
+    // O deadline inclui a leitura do corpo, que pode bloquear mesmo após os headers.
+    if (!resposta.ok) {
+      let mensagem = null
+      try {
+        const dados = JSON.parse(texto)
+        mensagem = dados?.message || dados?.erro || dados?.error || null
+      } catch { /* respostas de erro sem JSON usam o status HTTP */ }
+      throw new Error(mensagem || `erro HTTP ${resposta.status}`)
+    }
+
+    if (!texto.trim()) return null
+    try {
+      return JSON.parse(texto)
+    } catch {
+      throw new Error('a API respondeu um conteúdo inválido. confira a rota /api/indicador.')
+    }
   } catch (e) {
-    if (e?.name === 'AbortError') {
+    if (sinalExterno?.aborted) throw e
+    if (controller.signal.aborted || e?.name === 'AbortError') {
       throw new Error(`a API não respondeu em ${TIMEOUT_MS / 1000} s. verifique se o Node-RED está ativo.`)
     }
-    throw new Error('não foi possível conectar à API de indicadores. verifique se o Node-RED está ativo.')
+    if (e instanceof SyntaxError) throw e
+    if (e instanceof Error && (e.message.startsWith('erro HTTP ') || e.message === 'a API respondeu um conteúdo inválido. confira a rota /api/indicador.')) throw e
+    if (e instanceof TypeError) {
+      throw new Error('não foi possível conectar à API de indicadores. verifique se o Node-RED está ativo.')
+    }
+    throw e
   } finally {
     clearTimeout(timer)
-  }
-
-  const texto = await resposta.text()
-
-  // Verifica status antes de tentar interpretar o corpo — erros HTTP com corpo HTML
-  // teriam lançado "conteúdo inválido" antes; agora mostram "erro HTTP 404" etc.
-  if (!resposta.ok) {
-    let mensagem = null
-    try {
-      const dados = JSON.parse(texto)
-      mensagem = dados?.message || dados?.erro || dados?.error || null
-    } catch { /* corpo não é JSON — usa mensagem genérica */ }
-    throw new Error(mensagem || `erro HTTP ${resposta.status}`)
-  }
-
-  if (!texto.trim()) return null
-  try {
-    return JSON.parse(texto)
-  } catch {
-    throw new Error('a API respondeu um conteúdo inválido. confira a rota /api/indicador.')
+    sinalExterno?.removeEventListener('abort', abortar)
   }
 }
 
@@ -53,20 +61,20 @@ function validarLista(dados) {
 }
 
 export const indicadorService = {
-  async listar() {
-    return validarLista(await requisicao(endpoint))
+  async listar(opcoes = {}) {
+    return validarLista(await requisicao(endpoint, opcoes))
   },
-  consultar(id) {
-    return requisicao(`${endpoint}/${encodeURIComponent(id)}`)
+  consultar(id, opcoes = {}) {
+    return requisicao(`${endpoint}/${encodeURIComponent(id)}`, opcoes)
   },
-  cadastrar(dados) {
-    return requisicao(endpoint, { method: 'POST', body: JSON.stringify(dados) })
+  cadastrar(dados, opcoes = {}) {
+    return requisicao(endpoint, { ...opcoes, method: 'POST', body: JSON.stringify(dados) })
   },
-  atualizar(id, dados) {
-    return requisicao(`${endpoint}/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(dados) })
+  atualizar(id, dados, opcoes = {}) {
+    return requisicao(`${endpoint}/${encodeURIComponent(id)}`, { ...opcoes, method: 'PUT', body: JSON.stringify(dados) })
   },
-  excluir(id) {
-    return requisicao(`${endpoint}/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  excluir(id, opcoes = {}) {
+    return requisicao(`${endpoint}/${encodeURIComponent(id)}`, { ...opcoes, method: 'DELETE' })
   },
   endpoint,
 }

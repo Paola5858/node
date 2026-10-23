@@ -1,11 +1,17 @@
 import React, { useState } from 'react'
 
 function VisualizarIndicador({ indicador, onVoltar }) {
-  const [carregando, setCarregando] = useState(true)
-  const [indisponivel, setIndisponivel] = useState(false)
+  const [documentoCarregado, setDocumentoCarregado] = useState(null)
   const url = indicador?.Url || ''
+  const identidade = `${indicador?.Id ?? ''}:${url}`
+  const carregando = documentoCarregado !== identidade
   let segura = false
   try { segura = ['http:', 'https:'].includes(new URL(url).protocol) } catch { segura = false }
+  let linkPublicoPowerBi = false
+  try {
+    const destino = new URL(url)
+    linkPublicoPowerBi = destino.hostname === 'app.powerbi.com' && destino.pathname === '/view' && destino.searchParams.has('r')
+  } catch { /* URL inválida é tratada abaixo */ }
 
   if (!segura) {
     return (
@@ -50,33 +56,27 @@ function VisualizarIndicador({ indicador, onVoltar }) {
       </div>
 
       <div className="viewer-frame">
-        {carregando && !indisponivel && (
+        {carregando && (
           <div className="viewer-loading">
             <span className="loading-bar" />
-            <strong>carregando painel...</strong>
+            <strong role="status">aguardando o documento do painel...</strong>
           </div>
         )}
-        {indisponivel ? (
-          <div className="viewer-state">
-            <strong>o painel não pôde ser exibido aqui.</strong>
-            <small>o provedor pode bloquear iframe ou exigir outra sessão. o botão acima abre o endereço original.</small>
-          </div>
-        ) : (
-          <iframe
-            title={`Painel ${indicador.Nome}`}
-            src={url}
-            sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
-            allowFullScreen
-            referrerPolicy="strict-origin-when-cross-origin"
-            onLoad={() => setCarregando(false)}
-            onError={() => { setCarregando(false); setIndisponivel(true) }}
-          />
-        )}
+        <iframe
+          key={identidade}
+          title={`Painel ${indicador.Nome}`}
+          src={url}
+          sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
+          allowFullScreen
+          referrerPolicy="strict-origin-when-cross-origin"
+          onLoad={() => setDocumentoCarregado(identidade)}
+        />
       </div>
 
       <small className="viewer-note">
-        a visualização respeita as políticas de segurança do site externo. o Plume não tenta contornar bloqueios do navegador.
+        o navegador informa apenas que o documento do iframe carregou; isso não confirma que o relatório está disponível. O conteúdo pode exigir autenticação, permissão ou configuração de incorporação compatível. Se não aparecer, abra o endereço em uma nova aba.
       </small>
+      {linkPublicoPowerBi && <div className="error-feedback" role="note"><strong>atenção: link público do Power BI.</strong><span>O formato /view?r= corresponde a Publicar na Web. Qualquer pessoa na internet pode acessar o relatório sem autenticação; não use para dados confidenciais.</span></div>}
     </section>
   )
 }

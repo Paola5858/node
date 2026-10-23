@@ -29,7 +29,7 @@ describe('CadastroPage', () => {
     expect(screen.getByText('a data final deve ser depois da inicial')).toBeInTheDocument()
   })
 
-  it('cadastra uma safra com dados e imagem validos', async () => {
+  it('não anuncia sucesso quando não existe API de persistência', async () => {
     const user = userEvent.setup()
     render(<CadastroPage tipo="safra" onNavigate={() => {}} />)
 
@@ -39,6 +39,6 @@ describe('CadastroPage', () => {
     await user.upload(screen.getByLabelText(/imagem da safra/i), new File(['imagem'], 'safra.png', { type: 'image/png' }))
     await user.click(screen.getByRole('button', { name: /cadastrar registro/i }))
 
-    expect(screen.getByRole('status')).toHaveTextContent('cadastrado com sucesso')
+    expect(screen.getByRole('alert')).toHaveTextContent('registro não salvo: a API de persistência para safra não está disponível')
   })
 })

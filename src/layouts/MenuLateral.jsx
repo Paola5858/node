@@ -38,7 +38,8 @@ const grupos = [
 // indicadorSelecionadoId: Id do indicador atualmente selecionado (passado pelo App).
 // Necessário para marcar o item ativo individualmente — sem ele, todos os itens
 // dinâmicos ficam com a classe "ativo" ao mesmo tempo (bug F-03 corrigido aqui).
-function MenuLateral({ aberto, telaAtual, setTela, indicadores = [], onSelectIndicator, indicadorSelecionadoId }) {
+function MenuLateral({ aberto, telaAtual, setTela, indicadores = [], onSelectIndicator, indicadorSelecionadoId, sessao }) {
+  const nomeUsuario = sessao?.nome || sessao?.name || sessao?.email || "usuário";
   return (
     <aside
       className={`menu-lateral ${aberto ? "aberto" : "fechado"}`}
@@ -111,10 +112,10 @@ function MenuLateral({ aberto, telaAtual, setTela, indicadores = [], onSelectInd
       </nav>
       <div className="sidebar-bottom">
         <div className="profile-card">
-          <span className="avatar">ps</span>
+          <span className="avatar">{String(nomeUsuario).slice(0, 2).toLowerCase()}</span>
           <div>
-            <strong>paola soares</strong>
-            <small>equipe plume</small>
+            <strong>{nomeUsuario}</strong>
+            <small>{sessao ? "sessão autorizada" : "sem sessão"}</small>
           </div>
           <span className="more">•••</span>
         </div>

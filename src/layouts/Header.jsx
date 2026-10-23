@@ -1,3 +1,4 @@
+import React from "react";
 import ContextSelector from "../components/common/ContextSelector";
 
 function Header({ safraAtual, safras, onChangeSafra, sessao, onLogout }) {
@@ -16,12 +17,12 @@ function Header({ safraAtual, safras, onChangeSafra, sessao, onLogout }) {
         />
         {sessao ? (
           <>
-            <span className="header-session">{sessao.nome}</span>
+          <span className="header-session">{sessao.nome || sessao.name || sessao.email}</span>
             <button className="header-logout" type="button" onClick={onLogout}>sair</button>
-            <span className="header-avatar">{sessao.nome.slice(0, 2).toLowerCase()}</span>
+            <span className="header-avatar">{String(sessao.nome || sessao.name || sessao.email || 'u').slice(0, 2).toLowerCase()}</span>
           </>
         ) : (
-          <span className="header-login">acesso local</span>
+          <span className="header-login">sessão não iniciada</span>
         )}
       </div>
     </header>

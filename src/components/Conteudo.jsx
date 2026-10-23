@@ -1,3 +1,4 @@
+import React from "react";
 import { dashboardData } from "../data/demo/operacao";
 
 function Conteudo({ onNavigate, safraAtual }) {

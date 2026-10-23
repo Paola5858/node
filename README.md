@@ -14,11 +14,17 @@ Os testes do fluxo de cadastro ficam em `src/pages/CadastroPage.test.jsx`. Varia
 
 ## Integração de indicadores
 
-O catálogo de indicadores usa a rota `GET/POST /api/indicador` e as rotas `GET/PUT/DELETE /api/indicador/:id`. Em desenvolvimento, o Vite encaminha `/api` para `http://127.0.0.1:1880`, onde o Node-RED deve estar executando. Se a API estiver em outro endereço, copie `.env.example` para `.env` e ajuste `VITE_API_URL`.
+O catálogo de indicadores usa `GET/POST /api/indicador` e `GET/PUT/DELETE /api/indicador/:id`, conforme a documentação existente do frontend. O GET foi observado respondendo JSON em `http://127.0.0.1:1880/api/indicador` durante esta execução. O fluxo Node-RED e os métodos de escrita não estão neste repositório; persistência de CRUD, autenticação e autorização não foram comprovadas. Em desenvolvimento, o Vite encaminha `/api` para essa instância local.
 
-O serviço valida respostas HTTP, aceita `204 No Content`, rejeita HTML ou JSON inválido e mostra mensagens úteis para falhas de rede. A tela de indicadores mantém busca, favoritos, edição, exclusão, menu dinâmico e painel incorporado.
+O serviço valida respostas HTTP, aceita `204 No Content`, rejeita HTML ou JSON inválido e mantém o timeout durante a leitura do corpo. A tela de indicadores mantém busca, favoritos, edição, exclusão, menu dinâmico e painel incorporado.
 
-O Power BI usa o link gerado por Publicar na Web recebido para esta atividade. Esse modo não exige login, mas torna o relatório público. Para dados reais ou um SaaS, substitua `VITE_POWERBI_PUBLIC_URL` por uma incorporação segura ou Power BI Embedded com autenticação e backend. O aplicativo oferece um botão para abrir o painel em nova aba caso o provedor bloqueie o iframe.
+Não configure um link de Publicar na Web para relatórios privados: a Microsoft informa que qualquer pessoa na internet pode ver o relatório sem autenticação ([documentação](https://learn.microsoft.com/en-us/power-bi/collaborate-share/service-publish-to-web)). Use incorporação segura do Power BI ou Embedded com backend e credenciais geridas no servidor. Não há URL de relatório padrão no código. O navegador não permite ao Plume confirmar que o conteúdo interno de um iframe remoto está funcional.
+
+## Autenticação e persistência pendentes
+
+O frontend não armazena mais senhas nem considera uma sessão do Web Storage válida. Ao iniciar, remove somente o campo de senha em texto puro de um perfil legado, preservando os demais campos que conseguir ler. As telas de acesso usam o contrato preparado `/api/auth/session`, `/api/auth/login`, `/api/auth/register` e `/api/auth/logout`; esses endpoints não existem no backend inspecionado, portanto o acesso permanece bloqueado até a implementação de sessão no servidor. O servidor precisa usar hash de senha, cookie `HttpOnly`, política `SameSite`/`Secure`, proteção CSRF, limitação de tentativas e autorização em cada endpoint. Não há código de backend ou banco neste repositório para implementar ou comprovar essas garantias.
+
+Os formulários de cadastro de domínio não simulam sucesso. Como não foram encontrados endpoints nem fluxos Node-RED para essas entidades, eles informam que o registro não foi salvo. Dados demonstrativos do dashboard permanecem identificados no código e não são tratados como leituras reais da operação.
 
 Antes de testar o CRUD, publique o fluxo do Node-RED e confirme que `http://127.0.0.1:1880/api/indicador` retorna uma lista JSON.
 

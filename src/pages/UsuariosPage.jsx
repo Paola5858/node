@@ -1,64 +1,48 @@
-import { useState } from 'react'
-import ImageCapture from '../components/cadastros/ImageCapture'
-import { lerUsuario, salvarUsuario } from '../data/storage'
-
-const initialState = { nome: '', email: '', senha: '', confirmarSenha: '' }
-
-function validar(valores, foto) {
-  const erros = {}
-  if (!valores.nome.trim()) erros.nome = 'informe seu nome'
-  if (!valores.email.trim()) erros.email = 'informe seu e-mail'
-  else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(valores.email)) erros.email = 'use um e-mail válido'
-  if (valores.senha.length < 6) erros.senha = 'use pelo menos 6 caracteres'
-  if (valores.senha !== valores.confirmarSenha) erros.confirmarSenha = 'as senhas não coincidem'
-  if (!foto) erros.foto = 'selecione ou capture uma foto'
-  return erros
-}
+import React, { useState } from 'react'
+import { authService } from '../services/authService'
 
 function UsuariosPage({ onNavigate }) {
-  const usuarioExistente = lerUsuario()
-  const [valores, setValores] = useState(initialState)
-  const [foto, setFoto] = useState(usuarioExistente?.foto || '')
-  const [erros, setErros] = useState({})
+  const [valores, setValores] = useState({ nome: '', email: '', senha: '', confirmarSenha: '' })
+  const [erro, setErro] = useState('')
   const [mensagem, setMensagem] = useState('')
-  const [resetFoto, setResetFoto] = useState(0)
+  const [salvando, setSalvando] = useState(false)
 
   function atualizar(event) {
-    const { name, value } = event.target
-    setValores((atual) => ({ ...atual, [name]: value }))
-    setErros((atual) => ({ ...atual, [name]: '' }))
+    setValores((atual) => ({ ...atual, [event.target.name]: event.target.value }))
+    setErro('')
     setMensagem('')
   }
 
-  function salvar(event) {
+  async function salvar(event) {
     event.preventDefault()
-    const novosErros = validar(valores, foto)
-    setErros(novosErros)
-    if (Object.keys(novosErros).length) return
-    salvarUsuario({ nome: valores.nome.trim(), email: valores.email.trim().toLowerCase(), senha: valores.senha, foto })
-    setMensagem('usuário salvo no navegador. agora o acesso já pode ser testado.')
-    setValores(initialState)
-    setFoto('')
-    setResetFoto((valor) => valor + 1)
-    setTimeout(() => onNavigate('login'), 1500)
-  }
-
-  function alterarFoto(valor) {
-    setFoto(valor || '')
-    setErros((atual) => ({ ...atual, foto: '' }))
+    if (!valores.nome.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(valores.email)) return setErro('informe nome e um e-mail válido.')
+    if (valores.senha.length < 12) return setErro('use uma senha com pelo menos 12 caracteres.')
+    if (valores.senha !== valores.confirmarSenha) return setErro('as senhas não coincidem.')
+    setSalvando(true)
+    setErro('')
+    try {
+      await authService.cadastrar({ nome: valores.nome.trim(), email: valores.email.trim().toLowerCase(), senha: valores.senha })
+      setMensagem('o servidor confirmou o cadastro. você já pode entrar.')
+      setValores({ nome: '', email: '', senha: '', confirmarSenha: '' })
+    } catch (error) {
+      setErro(error.message)
+    } finally {
+      setSalvando(false)
+    }
   }
 
   return <section className="cadastro-page auth-page">
-    <div className="page-intro"><div><span className="eyebrow"><span className="eyebrow-line" /> acesso / identidade</span><h1>cadastro de <em>usuário.</em></h1><p>crie a identidade que vai organizar seu acesso ao workspace Plume.</p></div><div className="step-badge"><strong>08</strong><span>perfil<br />de acesso</span></div></div>
-    <div className="form-layout"><div className="form-card glass-card"><div className="card-heading"><div><span className="mini-label">dados da conta</span><h2>vamos deixar isso pessoal.</h2></div><span className="required-note">* campos obrigatórios</span></div>
-      {mensagem && <div className="success-feedback" role="status"><span className="success-mark">✓</span><div><strong>registro concluído.</strong><span>{mensagem}</span></div></div>}
+    <div className="page-intro"><div><span className="eyebrow"><span className="eyebrow-line" /> acesso / identidade</span><h1>solicitar <em>acesso.</em></h1><p>o cadastro só é concluído quando a API de autenticação confirma a criação da conta.</p></div></div>
+    <div className="form-layout"><div className="form-card glass-card"><div className="card-heading"><div><span className="mini-label">conta no servidor</span><h2>dados de acesso.</h2></div></div>
+      {mensagem && <div className="success-feedback" role="status">{mensagem}</div>}
+      {erro && <div className="error-feedback" role="alert">{erro}</div>}
       <form onSubmit={salvar} noValidate><div className="form-grid">
-        <div className={`field ${erros.nome ? 'has-error' : ''}`}><label htmlFor="nome">nome<span>*</span></label><input id="nome" name="nome" autoComplete="name" value={valores.nome} onChange={atualizar} placeholder="ex.: Paola Soares" />{erros.nome && <small className="field-error">{erros.nome}</small>}</div>
-        <div className={`field ${erros.email ? 'has-error' : ''}`}><label htmlFor="email">e-mail<span>*</span></label><input id="email" name="email" type="email" autoComplete="email" value={valores.email} onChange={atualizar} placeholder="voce@exemplo.com" />{erros.email && <small className="field-error">{erros.email}</small>}</div>
-        <div className={`field ${erros.senha ? 'has-error' : ''}`}><label htmlFor="senha">senha<span>*</span></label><input id="senha" name="senha" type="password" autoComplete="new-password" value={valores.senha} onChange={atualizar} placeholder="mínimo de 6 caracteres" />{erros.senha && <small className="field-error">{erros.senha}</small>}</div>
-        <div className={`field ${erros.confirmarSenha ? 'has-error' : ''}`}><label htmlFor="confirmarSenha">confirmar senha<span>*</span></label><input id="confirmarSenha" name="confirmarSenha" type="password" autoComplete="new-password" value={valores.confirmarSenha} onChange={atualizar} placeholder="repita sua senha" />{erros.confirmarSenha && <small className="field-error">{erros.confirmarSenha}</small>}</div>
-      </div><ImageCapture key={resetFoto} tipo="usuario" label="foto do usuário" required error={erros.foto} onImageChange={alterarFoto} /><div className="storage-note"><strong>nota de aula:</strong> os dados ficam no Web Storage apenas para demonstrar o fluxo. em produção, senha nunca deve ser guardada assim.</div><div className="form-footer"><span className="form-hint"><span className="hint-dot" /> localStorage ativo neste exercício.</span><div className="form-actions"><button type="button" className="button-ghost" onClick={() => onNavigate('login')}>já tenho acesso</button><button type="submit" className="button-primary">salvar usuário <span>→</span></button></div></div></form>
-    </div><aside className="form-aside"><span className="mini-label">o que acontece depois</span><div className="aside-orbit"><span className="orbit-dot" /><span className="orbit-line" /><strong>login</strong></div><p>a sessão atual vive só nesta aba. fechou a aba, acabou o passe livre.</p></aside></div>
+        <div className="field"><label htmlFor="nome">nome<span>*</span></label><input id="nome" name="nome" autoComplete="name" value={valores.nome} onChange={atualizar} required /></div>
+        <div className="field"><label htmlFor="email">e-mail<span>*</span></label><input id="email" name="email" type="email" autoComplete="email" value={valores.email} onChange={atualizar} required /></div>
+        <div className="field"><label htmlFor="senha">senha<span>*</span></label><input id="senha" name="senha" type="password" autoComplete="new-password" value={valores.senha} onChange={atualizar} required /></div>
+        <div className="field"><label htmlFor="confirmarSenha">confirmar senha<span>*</span></label><input id="confirmarSenha" name="confirmarSenha" type="password" autoComplete="new-password" value={valores.confirmarSenha} onChange={atualizar} required /></div>
+      </div><div className="storage-note">A senha é enviada apenas à API de autenticação e não é salva no Web Storage. O servidor precisa armazená-la usando hash de senha e política segura de sessão.</div><div className="form-footer"><span className="form-hint">cadastro remoto</span><div className="form-actions"><button type="button" className="button-ghost" onClick={() => onNavigate('login')}>já tenho acesso</button><button type="submit" className="button-primary" disabled={salvando}>{salvando ? 'enviando...' : 'solicitar acesso'} <span>→</span></button></div></div></form>
+    </div></div>
   </section>
 }
 export default UsuariosPage
