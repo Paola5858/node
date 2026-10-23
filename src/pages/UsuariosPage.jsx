@@ -21,7 +21,7 @@ function UsuariosPage({ onNavigate }) {
     setSalvando(true)
     setErro('')
     try {
-      await authService.cadastrar({ nome: valores.nome.trim(), email: valores.email.trim().toLowerCase(), senha: valores.senha })
+      await authService.cadastrar({ nome: valores.nome.trim(), organizationName: valores.organizationName.trim(), email: valores.email.trim().toLowerCase(), senha: valores.senha })
       setMensagem('organização e conta do responsável criadas no servidor. entre para iniciar uma sessão.')
       setValores({ nome: '', organizationName: '', email: '', senha: '', confirmarSenha: '' })
     } catch (error) {
