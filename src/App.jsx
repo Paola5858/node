@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Header from "./layouts/Header";
 import MenuLateral from "./layouts/MenuLateral";
 import Conteudo from "./components/Conteudo";
@@ -11,12 +11,13 @@ import { encerrarSessao, lerSessao } from "./data/storage";
 import { indicadorService, normalizarIndicador } from "./services/indicadorService";
 import "./App.css";
 
+// "indicadores" foi removido: a rota é tratada por IndicadoresPage (CRUD real via API),
+// não pelo CadastroPage genérico. Mantê-la aqui seria código morto com conflito de rota.
 const cadastroRoutes = [
   "safra",
   "unidade",
   "equipamento",
   "medicao",
-  "indicadores",
   "unidademedida",
   "tipoinformacao",
 ];
@@ -34,9 +35,20 @@ function App() {
   const [indicadores, setIndicadores] = useState([]);
   const [indicadorSelecionado, setIndicadorSelecionado] = useState(null);
 
-  useEffect(() => {
-    indicadorService.listar().then((dados) => setIndicadores(dados.map(normalizarIndicador))).catch(() => setIndicadores([]));
+  const atualizarIndicadores = useCallback((novosItens) => {
+    setIndicadores(novosItens);
+    setIndicadorSelecionado((atual) => {
+      if (!atual) return null;
+      return novosItens.find((item) => String(item.Id) === String(atual.Id)) || null;
+    });
   }, []);
+
+  useEffect(() => {
+    indicadorService
+      .listar()
+      .then((dados) => atualizarIndicadores(dados.map(normalizarIndicador)))
+      .catch(() => setIndicadores([]));
+  }, [atualizarIndicadores]);
 
   useEffect(() => {
     const atualizarRota = () => setRota(rotaAtual());
@@ -93,7 +105,14 @@ function App() {
         onLogout={sair}
       />
       <div className="layout">
-        <MenuLateral aberto={menuAberto} telaAtual={rota} setTela={navegar} indicadores={indicadores} onSelectIndicator={setIndicadorSelecionado} />
+        <MenuLateral
+          aberto={menuAberto}
+          telaAtual={rota}
+          setTela={navegar}
+          indicadores={indicadores}
+          onSelectIndicator={setIndicadorSelecionado}
+          indicadorSelecionadoId={indicadorSelecionado?.Id}
+        />
         <main className="area-conteudo">
           <div className="content-toolbar">
             <button
@@ -121,7 +140,11 @@ function App() {
           ) : rota === "usuarios" ? (
             <UsuariosPage onNavigate={navegar} />
           ) : rota === "indicadores" ? (
-            <IndicadoresPage initialSelectedId={indicadorSelecionado?.Id} onItemsChange={setIndicadores} />
+            <IndicadoresPage
+              initialSelectedId={indicadorSelecionado?.Id}
+              onItemsChange={atualizarIndicadores}
+              onSelect={setIndicadorSelecionado}
+            />
           ) : rota === "visao-geral" ? (
             <Conteudo onNavigate={navegar} safraAtual={safraAtual} />
           ) : paginaCadastro ? (

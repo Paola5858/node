@@ -1,3 +1,7 @@
+// A entrada "indicadores" foi removida deste catálogo: a rota /indicadores é
+// gerenciada por IndicadoresPage, que implementa o CRUD real via API Node-RED.
+// Manter aqui seria código morto (a rota nunca chegaria ao CadastroPage genérico)
+// e criaria confusão sobre onde os indicadores são realmente persistidos.
 export const catalogo = {
   safra: { numero: '01', title: 'cadastro de safra', eyebrow: 'produção / safras', description: 'defina o ciclo que organiza todos os seus registros de medição.', imagemLabel: 'imagem da safra', imagemObrigatoria: true, fields: [['nomeSafra', 'nome da safra', 'text', 'ex.: safra 2026'], ['dataInicio', 'data inicial', 'date', ''], ['dataFim', 'data final', 'date', '']] },
   unidade: { numero: '02', title: 'cadastro de unidade', eyebrow: 'estrutura / unidades', description: 'registre as unidades que fazem parte da operação da sua safra.', fields: [['nome', 'nome da unidade', 'text', 'ex.: fazenda primavera']] },
@@ -5,5 +9,4 @@ export const catalogo = {
   medicao: { numero: '04', title: 'cadastro de medição', eyebrow: 'dados / medições', description: 'conecte safra, equipamento e tipo de informação em um único registro.', fields: [['safra', 'safra', 'select', ['safra 2026', 'safra 2025']], ['equipamento', 'equipamento', 'select', ['estação meteorológica', 'sensor de solo']], ['tipoInformacao', 'tipo de informação', 'select', ['temperatura', 'umidade', 'precipitação']], ['valor', 'valor', 'number', 'ex.: 24.5'], ['data', 'data e hora', 'datetime-local', '']] },
   unidademedida: { numero: '05', title: 'cadastro de unidade de medida', eyebrow: 'dicionário / medidas', description: 'padronize nomes e símbolos para que seus dados falem a mesma língua.', fields: [['nome', 'nome da unidade', 'text', 'ex.: graus celsius'], ['simbolo', 'símbolo', 'text', 'ex.: °C']] },
   tipoinformacao: { numero: '06', title: 'cadastro de tipo de informação', eyebrow: 'dicionário / informações', description: 'descreva o que cada medição representa antes de analisar os resultados.', fields: [['nome', 'nome do tipo', 'text', 'ex.: temperatura do ar'], ['unidadeMedida', 'unidade de medida', 'select', ['graus celsius', 'milímetros', 'percentual']]] },
-  indicadores: { numero: '07', title: 'cadastro de indicadores', eyebrow: 'análise / indicadores', description: 'crie referências claras para interpretar o comportamento da sua operação.', fields: [['nome', 'nome do indicador', 'text', 'ex.: produtividade média'], ['descricao', 'descrição', 'text', 'ex.: média por hectare'], ['url', 'url de referência', 'url', 'ex.: https://plume.app']] },
 }

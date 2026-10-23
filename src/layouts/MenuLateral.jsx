@@ -1,3 +1,5 @@
+import React from "react";
+
 const grupos = [
   {
     titulo: "operação",
@@ -33,7 +35,10 @@ const grupos = [
   },
 ];
 
-function MenuLateral({ aberto, telaAtual, setTela, indicadores = [], onSelectIndicator }) {
+// indicadorSelecionadoId: Id do indicador atualmente selecionado (passado pelo App).
+// Necessário para marcar o item ativo individualmente — sem ele, todos os itens
+// dinâmicos ficam com a classe "ativo" ao mesmo tempo (bug F-03 corrigido aqui).
+function MenuLateral({ aberto, telaAtual, setTela, indicadores = [], onSelectIndicator, indicadorSelecionadoId }) {
   return (
     <aside
       className={`menu-lateral ${aberto ? "aberto" : "fechado"}`}
@@ -80,18 +85,25 @@ function MenuLateral({ aberto, telaAtual, setTela, indicadores = [], onSelectInd
             ))}
             {grupo.titulo === "inteligência" && indicadores.length > 0 && (
               <div className="sidebar-dynamic-items" aria-label="Indicadores cadastrados">
-                {indicadores.map((indicador) => (
-                  <button
-                    className={`nav-item nav-item-dynamic ${telaAtual === "indicadores" ? "ativo" : ""}`}
-                    type="button"
-                    key={indicador.Id}
-                    title={indicador.Descricao}
-                    onClick={() => { onSelectIndicator?.(indicador); setTela("indicadores") }}
-                  >
-                    <span className="nav-glyph" aria-hidden="true">↳</span>
-                    <span>{indicador.Nome}</span>
-                  </button>
-                ))}
+                {indicadores.map((indicador) => {
+                  // Compara o Id do indicador com o selecionado E exige que a tela
+                  // seja "indicadores" — assim cada item é marcado individualmente.
+                  const esteAtivo =
+                    telaAtual === "indicadores" &&
+                    String(indicadorSelecionadoId) === String(indicador.Id);
+                  return (
+                    <button
+                      className={`nav-item nav-item-dynamic ${esteAtivo ? "ativo" : ""}`}
+                      type="button"
+                      key={indicador.Id}
+                      title={indicador.Descricao}
+                      onClick={() => { onSelectIndicator?.(indicador); setTela("indicadores"); }}
+                    >
+                      <span className="nav-glyph" aria-hidden="true">↳</span>
+                      <span>{indicador.Nome}</span>
+                    </button>
+                  );
+                })}
               </div>
             )}
           </div>

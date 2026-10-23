@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { indicadorService, normalizarIndicador } from '../services/indicadorService'
 import VisualizarIndicador from '../components/VisualizarIndicador'
 
@@ -24,7 +24,14 @@ function validar(form) {
   return erros
 }
 
-function IndicadoresPage({ initialSelectedId, onItemsChange }) {
+function normalizarTexto(txt) {
+  return String(txt || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+}
+
+function IndicadoresPage({ initialSelectedId, onItemsChange, onSelect }) {
   const [itens, setItens] = useState([])
   const [form, setForm] = useState(vazio)
   const [idEdicao, setIdEdicao] = useState(null)
@@ -38,6 +45,18 @@ function IndicadoresPage({ initialSelectedId, onItemsChange }) {
   const [salvando, setSalvando] = useState(false)
   const [excluindo, setExcluindo] = useState(null)
 
+  // Ref sempre atual para os itens — permite ler o estado corrente dentro de
+  // efeitos que não devem re-executar ao mudar itens (F-05).
+  const itensRef = useRef(itens)
+  useEffect(() => { itensRef.current = itens }, [itens])
+
+  function selecionarIndicador(item) {
+    setSelecionado(item)
+    onSelect?.(item)
+  }
+
+  // carregar: NÃO depende de initialSelectedId para evitar chamadas extras à API
+  // quando o usuário clica em itens do menu enquanto já está nesta tela (F-05).
   const carregar = useCallback(async () => {
     setEstado('carregando')
     setErro('')
@@ -46,20 +65,39 @@ function IndicadoresPage({ initialSelectedId, onItemsChange }) {
       const normalizados = dados.map(normalizarIndicador).filter((item) => item.Id !== undefined && item.Id !== null)
       setItens(normalizados)
       onItemsChange?.(normalizados)
-      setSelecionado((atual) => normalizados.find((item) => String(item.Id) === String(atual?.Id)) || null)
-      if (initialSelectedId !== undefined) setSelecionado(normalizados.find((item) => String(item.Id) === String(initialSelectedId)) || null)
+      // Preserva a seleção atual se o item ainda existir na lista atualizada.
+      setSelecionado((atual) => {
+        const mantido = normalizados.find((item) => String(item.Id) === String(atual?.Id)) ?? null
+        if (!mantido && atual) onSelect?.(null)
+        return mantido
+      })
       setEstado('pronto')
     } catch (error) {
       setEstado('erro')
       setErro(error.message)
     }
-  }, [initialSelectedId, onItemsChange])
+  }, [onItemsChange, onSelect])
 
   useEffect(() => { Promise.resolve().then(carregar) }, [carregar])
 
+  // Sincroniza a seleção quando initialSelectedId muda (clique no menu lateral)
+  // sem disparar uma nova chamada à API.
+  useEffect(() => {
+    if (initialSelectedId === undefined || initialSelectedId === null) return
+    setSelecionado((atual) => {
+      if (atual && String(atual.Id) === String(initialSelectedId)) return atual
+      return itensRef.current.find((item) => String(item.Id) === String(initialSelectedId)) ?? null
+    })
+  }, [initialSelectedId])
+
   const filtrados = useMemo(() => {
-    const termo = busca.trim().toLocaleLowerCase()
-    return itens.filter((item) => !termo || item.Nome.toLocaleLowerCase().includes(termo) || item.Descricao.toLocaleLowerCase().includes(termo))
+    const termo = normalizarTexto(busca.trim())
+    return itens.filter((item) => {
+      if (!termo) return true
+      const nome = normalizarTexto(item.Nome)
+      const desc = normalizarTexto(item.Descricao)
+      return nome.includes(termo) || desc.includes(termo)
+    })
   }, [busca, itens])
 
   function alterar(event) {
@@ -95,45 +133,216 @@ function IndicadoresPage({ initialSelectedId, onItemsChange }) {
       if (idEdicao === null) await indicadorService.cadastrar(form)
       else await indicadorService.atualizar(idEdicao, form)
       await carregar()
+      setIdEdicao(null)
+      setForm(vazio)
+      setErros({})
       setMensagem(idEdicao === null ? 'indicador criado e menu atualizado.' : 'indicador atualizado com sucesso.')
-      limpar()
     } catch (error) { setErro(error.message) } finally { setSalvando(false) }
   }
 
   async function excluir(item) {
-    if (!window.confirm(`Excluir o indicador “${item.Nome}”?`)) return
+    if (!window.confirm(`Excluir o indicador "${item.Nome}"?`)) return
     setExcluindo(item.Id)
     setErro('')
     try {
       await indicadorService.excluir(item.Id)
       setFavoritos((atual) => atual.filter((id) => String(id) !== String(item.Id)))
+      // carregar() já remove o item excluído da lista e limpa selecionado caso
+      // o item deletado fosse o selecionado (F-07).
       await carregar()
-      if (String(selecionado?.Id) === String(item.Id)) setSelecionado(null)
       setMensagem('indicador removido.')
     } catch (error) { setErro(error.message) } finally { setExcluindo(null) }
   }
 
   function alternarFavorito(id) {
     setFavoritos((atual) => {
-      const proximo = atual.some((item) => String(item) === String(id)) ? atual.filter((item) => String(item) !== String(id)) : [...atual, id]
+      const proximo = atual.some((item) => String(item) === String(id))
+        ? atual.filter((item) => String(item) !== String(id))
+        : [...atual, id]
       localStorage.setItem(favoritosKey, JSON.stringify(proximo))
       return proximo
     })
   }
 
-  return <section className="indicadores-page">
-    <div className="page-intro"><div><span className="eyebrow"><span className="eyebrow-line" /> inteligência / indicadores</span><h1>dados que viram <em>direção.</em></h1><p>cadastre os painéis que ajudam sua operação a decidir com menos ruído e mais contexto.</p></div><div className="step-badge"><strong>07</strong><span>indicadores<br />do domínio</span></div></div>
-    <div className="indicator-grid">
-      <div className="indicator-main">
-        <div className="glass-card indicator-toolbar"><div><span className="mini-label">catálogo conectado</span><h2>{itens.length} indicador{itens.length === 1 ? '' : 'es'}</h2></div><div className="indicator-actions"><label className="search-field"><span>⌕</span><input aria-label="Buscar indicador" value={busca} onChange={(event) => setBusca(event.target.value)} placeholder="buscar por nome" /></label><button className="button-ghost" type="button" onClick={carregar}>atualizar</button></div></div>
-        {estado === 'carregando' && <div className="indicator-state"><span className="loading-bar" /><strong>consultando sua API...</strong><small>buscando indicadores no Node-RED.</small></div>}
-        {estado === 'erro' && <div className="indicator-state state-error"><strong>não consegui falar com a API.</strong><small>{erro}</small><code>{indicadorService.endpoint}</code><button className="button-primary" type="button" onClick={carregar}>tentar novamente <span>↗</span></button></div>}
-        {estado === 'pronto' && !filtrados.length && <div className="indicator-state"><strong>{itens.length ? 'nenhum resultado para essa busca.' : 'seu catálogo ainda está vazio.'}</strong><small>{itens.length ? 'tente outro nome ou limpe a busca.' : 'cadastre o primeiro indicador no formulário ao lado.'}</small></div>}
-        {estado === 'pronto' && filtrados.length > 0 && <div className="indicator-list">{filtrados.map((item) => <article className={`indicator-item ${selecionado?.Id === item.Id ? 'selected' : ''}`} key={item.Id} onClick={() => setSelecionado(item)}><button className={`favorite-button ${favoritos.some((id) => String(id) === String(item.Id)) ? 'is-favorite' : ''}`} type="button" onClick={(event) => { event.stopPropagation(); alternarFavorito(item.Id) }} aria-label="Alternar favorito">{favoritos.some((id) => String(id) === String(item.Id)) ? '★' : '☆'}</button><div className="indicator-item-copy"><strong>{item.Nome}</strong><small>{item.Descricao}</small><span>{item.Url}</span></div><div className="indicator-item-actions"><button type="button" onClick={(event) => { event.stopPropagation(); prepararEdicao(item) }}>editar</button><button type="button" onClick={(event) => { event.stopPropagation(); excluir(item) }} disabled={excluindo === item.Id}>{excluindo === item.Id ? 'removendo' : 'excluir'}</button></div></article>)}</div>}
-        {selecionado && <VisualizarIndicador indicador={selecionado} />}
+  return (
+    <section className="indicadores-page">
+      {/* Cabeçalho da página */}
+      <div className="page-intro">
+        <div>
+          <span className="eyebrow"><span className="eyebrow-line" /> inteligência / indicadores</span>
+          <h1>dados que viram <em>direção.</em></h1>
+          <p>cadastre os painéis que ajudam sua operação a decidir com menos ruído e mais contexto.</p>
+        </div>
+        <div className="step-badge"><strong>07</strong><span>indicadores<br />do domínio</span></div>
       </div>
-      <aside className="glass-card indicator-form-card"><div className="card-heading"><div><span className="mini-label">{idEdicao === null ? 'novo registro' : 'modo edição'}</span><h2>{idEdicao === null ? 'adicionar indicador.' : 'ajustar indicador.'}</h2></div>{idEdicao !== null && <button className="text-button" type="button" onClick={limpar}>cancelar</button>}</div>{mensagem && <div className="success-feedback" role="status"><span className="success-mark">✓</span><span>{mensagem}</span></div>}{erro && estado !== 'erro' && <div className="error-feedback" role="alert"><strong>operação não concluída.</strong><span>{erro}</span></div>}<form onSubmit={salvar} noValidate><div className={`field ${erros.Nome ? 'has-error' : ''}`}><label htmlFor="Nome">nome<span>*</span></label><input id="Nome" name="Nome" value={form.Nome} onChange={alterar} placeholder="ex.: produção diária" />{erros.Nome && <small className="field-error">{erros.Nome}</small>}</div><div className={`field ${erros.Descricao ? 'has-error' : ''}`}><label htmlFor="Descricao">descrição<span>*</span></label><textarea id="Descricao" name="Descricao" value={form.Descricao} onChange={alterar} placeholder="o que este painel acompanha?" rows="4" />{erros.Descricao && <small className="field-error">{erros.Descricao}</small>}</div><div className={`field ${erros.Url ? 'has-error' : ''}`}><label htmlFor="Url">URL do painel<span>*</span></label><input id="Url" name="Url" type="url" value={form.Url} onChange={alterar} placeholder="https://app.powerbi.com/view?r=..." />{erros.Url && <small className="field-error">{erros.Url}</small>}</div><div className="powerbi-hint"><span className="live-dot" /><div><strong>Power BI pronto para uso</strong><small>use o link público no campo acima.</small></div><button type="button" onClick={() => setForm((atual) => ({ ...atual, Url: painelPublico }))}>usar painel enviado</button></div><button className="button-primary form-submit" type="submit" disabled={salvando}>{salvando ? 'salvando...' : idEdicao === null ? 'cadastrar indicador' : 'salvar alterações'} <span>→</span></button></form></aside>
-    </div>
-  </section>
+
+      <div className="indicator-grid">
+        {/* Coluna principal: lista + visualizador */}
+        <div className="indicator-main">
+          {/* Barra de ferramentas */}
+          <div className="glass-card indicator-toolbar">
+            <div>
+              <span className="mini-label">catálogo conectado</span>
+              <h2>{itens.length} indicador{itens.length === 1 ? '' : 'es'}</h2>
+            </div>
+            <div className="indicator-actions">
+              <label className="search-field">
+                <span>⌕</span>
+                <input
+                  aria-label="Buscar indicador"
+                  value={busca}
+                  onChange={(event) => setBusca(event.target.value)}
+                  placeholder="buscar por nome"
+                />
+              </label>
+              <button className="button-ghost" type="button" onClick={carregar}>atualizar</button>
+            </div>
+          </div>
+
+          {/* Estado: carregando */}
+          {estado === 'carregando' && (
+            <div className="indicator-state">
+              <span className="loading-bar" />
+              <strong>consultando sua API...</strong>
+              <small>buscando indicadores no Node-RED.</small>
+            </div>
+          )}
+
+          {/* Estado: erro de comunicação */}
+          {estado === 'erro' && (
+            <div className="indicator-state state-error">
+              <strong>não consegui falar com a API.</strong>
+              <small>{erro}</small>
+              <code>{indicadorService.endpoint}</code>
+              <button className="button-primary" type="button" onClick={carregar}>
+                tentar novamente <span>↗</span>
+              </button>
+            </div>
+          )}
+
+          {/* Estado: pronto, sem resultados */}
+          {estado === 'pronto' && !filtrados.length && (
+            <div className="indicator-state">
+              <strong>{itens.length ? 'nenhum resultado para essa busca.' : 'seu catálogo ainda está vazio.'}</strong>
+              <small>{itens.length ? 'tente outro nome ou limpe a busca.' : 'cadastre o primeiro indicador no formulário ao lado.'}</small>
+            </div>
+          )}
+
+          {/* Lista de indicadores */}
+          {estado === 'pronto' && filtrados.length > 0 && (
+            <div className="indicator-list">
+              {filtrados.map((item) => (
+                <article
+                  className={`indicator-item ${selecionado?.Id === item.Id ? 'selected' : ''}`}
+                  key={item.Id}
+                  onClick={() => selecionarIndicador(item)}
+                >
+                  <button
+                    className={`favorite-button ${favoritos.some((id) => String(id) === String(item.Id)) ? 'is-favorite' : ''}`}
+                    type="button"
+                    onClick={(event) => { event.stopPropagation(); alternarFavorito(item.Id) }}
+                    aria-label="Alternar favorito"
+                  >
+                    {favoritos.some((id) => String(id) === String(item.Id)) ? '★' : '☆'}
+                  </button>
+                  <div className="indicator-item-copy">
+                    <strong>{item.Nome}</strong>
+                    <small>{item.Descricao}</small>
+                    <span>{item.Url}</span>
+                  </div>
+                  <div className="indicator-item-actions">
+                    <button
+                      type="button"
+                      onClick={(event) => { event.stopPropagation(); prepararEdicao(item) }}
+                    >
+                      editar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(event) => { event.stopPropagation(); excluir(item) }}
+                      disabled={excluindo === item.Id}
+                    >
+                      {excluindo === item.Id ? 'removendo' : 'excluir'}
+                    </button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
+
+          {/* Visualizador do painel selecionado com botão de fechar/retornar à lista (R16) */}
+          {selecionado && (
+            <VisualizarIndicador
+              indicador={selecionado}
+              onVoltar={() => selecionarIndicador(null)}
+            />
+          )}
+        </div>
+
+        {/* Coluna lateral: formulário */}
+        <aside className="glass-card indicator-form-card">
+          <div className="card-heading">
+            <div>
+              <span className="mini-label">{idEdicao === null ? 'novo registro' : 'modo edição'}</span>
+              <h2>{idEdicao === null ? 'adicionar indicador.' : 'ajustar indicador.'}</h2>
+            </div>
+            {idEdicao !== null && (
+              <button className="text-button" type="button" onClick={limpar}>cancelar</button>
+            )}
+          </div>
+
+          {mensagem && (
+            <div className="success-feedback" role="status">
+              <span className="success-mark">✓</span>
+              <span>{mensagem}</span>
+            </div>
+          )}
+
+          {erro && estado !== 'erro' && (
+            <div className="error-feedback" role="alert">
+              <strong>operação não concluída.</strong>
+              <span>{erro}</span>
+            </div>
+          )}
+
+          <form onSubmit={salvar} noValidate>
+            <div className={`field ${erros.Nome ? 'has-error' : ''}`}>
+              <label htmlFor="Nome">nome<span>*</span></label>
+              <input id="Nome" name="Nome" value={form.Nome} onChange={alterar} placeholder="ex.: produção diária" />
+              {erros.Nome && <small className="field-error">{erros.Nome}</small>}
+            </div>
+
+            <div className={`field ${erros.Descricao ? 'has-error' : ''}`}>
+              <label htmlFor="Descricao">descrição<span>*</span></label>
+              <textarea id="Descricao" name="Descricao" value={form.Descricao} onChange={alterar} placeholder="o que este painel acompanha?" rows="4" />
+              {erros.Descricao && <small className="field-error">{erros.Descricao}</small>}
+            </div>
+
+            <div className={`field ${erros.Url ? 'has-error' : ''}`}>
+              <label htmlFor="Url">URL do painel<span>*</span></label>
+              <input id="Url" name="Url" type="url" value={form.Url} onChange={alterar} placeholder="https://app.powerbi.com/view?r=..." />
+              {erros.Url && <small className="field-error">{erros.Url}</small>}
+            </div>
+
+            <div className="powerbi-hint">
+              <span className="live-dot" />
+              <div>
+                <strong>Power BI pronto para uso</strong>
+                <small>use o link público no campo acima.</small>
+              </div>
+              <button type="button" onClick={() => setForm((atual) => ({ ...atual, Url: painelPublico }))}>
+                usar painel enviado
+              </button>
+            </div>
+
+            <button className="button-primary form-submit" type="submit" disabled={salvando}>
+              {salvando ? 'salvando...' : idEdicao === null ? 'cadastrar indicador' : 'salvar alterações'} <span>→</span>
+            </button>
+          </form>
+        </aside>
+      </div>
+    </section>
+  )
 }
+
 export default IndicadoresPage
