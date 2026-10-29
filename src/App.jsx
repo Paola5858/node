@@ -2,10 +2,10 @@ import React, { useCallback, useEffect, useState } from "react";
 import Header from "./layouts/Header";
 import MenuLateral from "./layouts/MenuLateral";
 import Conteudo from "./components/Conteudo";
-import CadastroPage from "./pages/CadastroPage";
 import UsuariosPage from "./pages/UsuariosPage";
 import LoginPage from "./pages/LoginPage";
 import IndicadoresPage from "./pages/IndicadoresPage";
+import CadastroApi from "./components/CadastroApi";
 import { safrasDisponiveis } from "./data/demo/operacao";
 import { authService } from "./services/authService";
 import { removerSenhaLocalLegada } from "./data/storage";
@@ -187,7 +187,7 @@ function App() {
           ) : rota === "visao-geral" ? (
             <Conteudo onNavigate={navegar} safraAtual={safraAtual} />
           ) : paginaCadastro ? (
-            <CadastroPage key={rota} tipo={rota} />
+            <CadastroApi key={rota} recurso={rota} />
           ) : (
             <section className="empty-page">
               <span className="eyebrow">

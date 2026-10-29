@@ -12,6 +12,14 @@ Aplicação React/Vite para indicadores e cadastros operacionais. A API Node.js 
 
 O banco é criado em `data/plume.sqlite` na primeira inicialização. Essa pasta é ignorada pelo Git. O servidor aceita `DATABASE_PATH=:memory:` para testes isolados. Para visualizar uma build, use `npm run build` e sirva `dist/` por uma hospedagem configurada para encaminhar `/api` ao servidor.
 
+## CRUD operacional da Usina
+
+Os seis cadastros da atividade foram reunidos em `src/components/CadastroApi.jsx`, alimentado por `src/config/cadastros.js` e `src/services/api.js`. A mesma camada atende Safras, Unidades, Equipamentos, Medições, Unidades de medida e Tipos de informação, sem copiar seis componentes quase iguais.
+
+Os campos de relacionamento consultam a API e exibem nomes amigáveis no select. Equipamentos dependem de Unidades, Tipos de informação dependem de Unidades de medida e Medições dependem de Safras, Equipamentos e Tipos de informação. A lista de Medições ainda possui busca, filtro por Safra e filtro por Equipamento, além de paginação local para não transformar uma tabela grande em um paredão de texto.
+
+Datas, números e referências são validados antes do envio. `Valor` segue como número JSON, `datetime-local` é enviado com segundos, Safra impede intervalo invertido e o backend mantém a proteção contra referências de outra organização e exclusões com dependências.
+
 ## API local
 
 | Método e rota | Uso |
