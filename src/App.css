@@ -2113,8 +2113,16 @@
    RESPONSIVIDADE E DISPOSITIVOS MÓVEIS (DRAWER / OVERLAY)
    ========================================================================== */
 
+@media (max-width: 1200px) {
+  .indicator-grid {
+    grid-template-areas:
+      "main"
+      "form";
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 @media (max-width: 900px) {
-  .indicator-grid,
   .form-layout,
   .overview-grid,
   .crud-layout,
