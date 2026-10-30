@@ -34,7 +34,7 @@ function VisualizarIndicador({ indicador, onVoltar }) {
         </div>
         <div className="viewer-state">
           <strong>URL de painel inválida.</strong>
-          <small>edite o indicador e informe um endereço http ou https.</small>
+          <small>edite o indicador e informe um endereço reportEmbed válido do Power BI.</small>
         </div>
       </section>
     )

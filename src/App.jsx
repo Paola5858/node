@@ -1,10 +1,14 @@
 import React, { useCallback, useEffect, useState } from "react";
+import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import Header from "./layouts/Header";
 import MenuLateral from "./layouts/MenuLateral";
 import Conteudo from "./components/Conteudo";
 import UsuariosPage from "./pages/UsuariosPage";
 import LoginPage from "./pages/LoginPage";
 import IndicadoresPage from "./pages/IndicadoresPage";
+import ImportacaoExcelPage from "./pages/ImportacaoExcelPage";
+import AlertasIndustriaisPage from "./pages/AlertasIndustriaisPage";
+import RelatoriosPage from "./pages/RelatoriosPage";
 import CadastroApi from "./components/CadastroApi";
 import { safrasDisponiveis } from "./data/demo/operacao";
 import { authService } from "./services/authService";
@@ -12,8 +16,7 @@ import { removerSenhaLocalLegada } from "./data/storage";
 import { indicadorService, normalizarIndicador } from "./services/indicadorService";
 import "./App.css";
 
-// "indicadores" foi removido: a rota é tratada por IndicadoresPage (CRUD real via API),
-// não pelo CadastroPage genérico. Mantê-la aqui seria código morto com conflito de rota.
+// Rotas genéricas de cadastro de entidades
 const cadastroRoutes = [
   "safra",
   "unidade",
@@ -23,13 +26,31 @@ const cadastroRoutes = [
   "tipoinformacao",
 ];
 
+// Agrupamento usado na trilha de navegação do cabeçalho de conteúdo.
+const grupoPorRota = {
+  "visao-geral": "operação",
+  safra: "operação",
+  unidade: "operação",
+  equipamento: "operação",
+  importacao: "operação",
+  medicao: "monitoramento",
+  alertas: "monitoramento",
+  mapa: "monitoramento",
+  indicadores: "inteligência",
+  relatorios: "inteligência",
+  tipoinformacao: "configuração",
+  unidademedida: "configuração",
+  usuarios: "configuração",
+  login: "conta",
+};
+
 function rotaAtual() {
   const rota = window.location.pathname.replace(/^\//, "");
   return rota === "" ? "visao-geral" : rota;
 }
 
 function App() {
-  const [menuAberto, setMenuAberto] = useState(true);
+  const [menuAberto, setMenuAberto] = useState(() => window.innerWidth > 1024);
   const [rota, setRota] = useState(rotaAtual);
   const [safraId, setSafraId] = useState(safrasDisponiveis[0].id);
   const [sessao, setSessao] = useState(null);
@@ -93,7 +114,7 @@ function App() {
       destino === "visao-geral" ? "/" : `/${destino}`,
     );
     setRota(destino);
-    if (window.innerWidth < 900) setMenuAberto(false);
+    if (window.innerWidth < 1024) setMenuAberto(false);
   }
 
   async function sair() {
@@ -126,6 +147,37 @@ function App() {
       ? "visão geral"
       : rota;
   const rotaPublica = rota === "login" || rota === "usuarios";
+  const grupoAtual = grupoPorRota[rota] || (paginaCadastro ? "cadastros" : "operação");
+
+  // Antes da sessão existir não há navegação a exibir: o login ocupa a tela.
+  const semShell =
+    estadoSessao === "verificando" ||
+    rota === "login" ||
+    (!rotaPublica && estadoSessao !== "autenticado");
+
+  if (semShell) {
+    return (
+      <div className="app-shell">
+        <main className="area-conteudo">
+          {estadoSessao === "verificando" && rota !== "login" ? (
+            <div className="auth-loading" role="status">
+              <strong>verificando sessão...</strong>
+              <small>aguardando confirmação do servidor.</small>
+            </div>
+          ) : (
+            <LoginPage
+              onAuthenticated={(usuario) => {
+                setSessao(usuario);
+                setEstadoSessao("autenticado");
+                navegar("visao-geral");
+              }}
+              onNavigate={navegar}
+            />
+          )}
+        </main>
+      </div>
+    );
+  }
 
   return (
     <div className="app-shell">
@@ -153,29 +205,29 @@ function App() {
               className="toolbar-button"
               type="button"
               onClick={alterarMenu}
-              aria-label="Abrir ou fechar menu lateral"
+              aria-label={menuAberto ? "Recolher menu lateral" : "Abrir menu lateral"}
+              aria-expanded={menuAberto}
+              aria-controls="menu-lateral"
             >
               <span className="toolbar-icon" aria-hidden="true">
-                {menuAberto ? "×" : "+"}
+                {menuAberto ? <PanelLeftClose size={15} /> : <PanelLeftOpen size={15} />}
               </span>
-              <span>{menuAberto ? "recolher menu" : "abrir menu"}</span>
+              <span>{menuAberto ? "recolher" : "abrir menu"}</span>
             </button>
-            <div className="breadcrumb" aria-label="Navegação atual">
-              <span>plume</span>
-              <span>/</span>
+            <nav className="breadcrumb" aria-label="Navegação atual">
+              <span>{grupoAtual}</span>
+              <span className="breadcrumb-sep" aria-hidden="true">/</span>
               <strong>{tituloRota}</strong>
-            </div>
-            <span className="status-pill" title="Dados estáticos de demonstração, não leituras reais da operação">
-              <span className="status-dot" /> dados de demonstração
+            </nav>
+            <span
+              className={`status-pill ${sessao ? "is-online" : ""}`}
+              title={sessao ? "Sessão confirmada pelo servidor" : "Nenhuma sessão confirmada"}
+            >
+              <span className="status-dot" aria-hidden="true" />
+              {sessao ? "sessão autenticada" : "sem sessão"}
             </span>
           </div>
-          {estadoSessao === "verificando" ? (
-            <div className="indicator-state" role="status"><strong>verificando sessão...</strong><small>aguardando confirmação do servidor.</small></div>
-          ) : !rotaPublica && estadoSessao !== "autenticado" ? (
-            <LoginPage onAuthenticated={(usuario) => { setSessao(usuario); setEstadoSessao("autenticado"); navegar("visao-geral"); }} onNavigate={navegar} />
-          ) : rota === "login" ? (
-            <LoginPage onAuthenticated={(usuario) => { setSessao(usuario); setEstadoSessao("autenticado"); navegar("visao-geral"); }} onNavigate={navegar} />
-          ) : rota === "usuarios" ? (
+          {rota === "usuarios" ? (
             <UsuariosPage onNavigate={navegar} />
           ) : rota === "indicadores" ? (
             <IndicadoresPage
@@ -184,6 +236,12 @@ function App() {
               onItemsChange={atualizarIndicadores}
               onSelect={setIndicadorSelecionado}
             />
+          ) : rota === "importacao" ? (
+            <ImportacaoExcelPage sessao={sessao} />
+          ) : rota === "alertas" ? (
+            <AlertasIndustriaisPage />
+          ) : rota === "relatorios" ? (
+            <RelatoriosPage />
           ) : rota === "visao-geral" ? (
             <Conteudo onNavigate={navegar} safraAtual={safraAtual} />
           ) : paginaCadastro ? (
@@ -196,7 +254,7 @@ function App() {
               <h1>{tituloRota}</h1>
               <p>
                 Este espaço está reservado para a próxima camada da operação.
-                Nenhum dado foi inventado aqui.
+                Nenhum dado fictício foi inventado aqui.
               </p>
               <button
                 className="button-primary"

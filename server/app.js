@@ -4,7 +4,7 @@ import { promisify } from 'node:util'
 const scrypt = promisify(scryptCallback)
 const SESSION_SECONDS = 60 * 60 * 8
 const MAX_BODY_BYTES = 12 * 1024 * 1024
-const reportPadrao = 'https://app.powerbi.com/reportEmbed?reportId=22450b7a-e0c7-4472-a33a-becc7adaa99e&autoAuth=true&ctid=b1051c4b-3b94-41ab-9441-e73a72342fdd'
+const reportPadrao = 'https://app.powerbi.com/reportEmbed?reportId=022d42c1-d543-4a0d-9bd8-f3ac742a7ff1&autoAuth=true&ctid=b1051c4b-3b94-41ab-9441-e73a72342fdd'
 const kinds = new Set(['safra', 'unidade', 'equipamento', 'medicao', 'unidademedida', 'tipoinformacao'])
 const relations = {
   equipamento: { unidade: 'unidade' },
@@ -106,13 +106,15 @@ export function createApiHandler({ db, secureCookies = process.env.NODE_ENV === 
     response.setHeader('Referrer-Policy', 'same-origin')
     response.setHeader('X-Frame-Options', 'DENY')
     response.setHeader('Cross-Origin-Resource-Policy', 'same-origin')
+    response.setHeader('Content-Security-Policy', "default-src 'none'; frame-ancestors 'none'")
     if (request.method === 'OPTIONS') return json(response, 204, null, { Allow: 'GET, POST, PUT, PATCH, DELETE, OPTIONS' })
 
+    const startMs = Date.now()
+    const pathname = url.pathname.replace(/\/$/, '')
     try {
       let body = {}
       if (!['GET', 'HEAD'].includes(request.method)) body = await readBody(request)
       if (!body || typeof body !== 'object' || Array.isArray(body)) return error(response, 400, 'envie um objeto JSON para a operação.')
-      const pathname = url.pathname.replace(/\/$/, '')
 
       if (pathname === '/api/health' && request.method === 'GET') return json(response, 200, { status: 'ok' })
 
@@ -272,8 +274,20 @@ export function createApiHandler({ db, secureCookies = process.env.NODE_ENV === 
       if (cause.status) return error(response, cause.status, cause.message)
       if (cause.code === 'ERR_SQLITE_ERROR') return error(response, 500, 'não foi possível concluir a operação no armazenamento.')
       return error(response, 500, 'erro interno do serviço.')
+    } finally {
+      if (process.env.NODE_ENV !== 'test' && !process.env.VITEST) {
+        const ms = Date.now() - startMs
+        process.stdout.write(`[${new Date().toISOString()}] ${request.method} ${pathname} - ${ms}ms\n`)
+      }
     }
   }
+}
+
+export function startSessionCleanup(db) {
+  const cleanup = db.prepare('DELETE FROM sessions WHERE expires_at <= ?')
+  return setInterval(() => {
+    try { cleanup.run(Date.now()) } catch { /* ignore */ }
+  }, 60 * 60 * 1000)
 }
 
 function cryptoRandomId() { return randomBytes(16).toString('hex') }
