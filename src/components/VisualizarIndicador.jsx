@@ -4,8 +4,11 @@ function urlPowerBiValida(value) {
   try {
     const url = new URL(value)
     const guid = /^[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}$/i
-    return url.protocol === 'https:' && url.hostname === 'app.powerbi.com' && url.pathname === '/reportEmbed' &&
+    const publicToken = url.searchParams.get('r') || ''
+    const publicLink = url.pathname === '/view' && /^[A-Za-z\d_-]{20,2048}$/.test(publicToken)
+    const reportEmbed = url.pathname === '/reportEmbed' &&
       guid.test(url.searchParams.get('reportId') || '') && guid.test(url.searchParams.get('ctid') || '')
+    return url.protocol === 'https:' && url.hostname === 'app.powerbi.com' && (publicLink || reportEmbed)
   } catch { return false }
 }
 
@@ -34,7 +37,7 @@ function VisualizarIndicador({ indicador, onVoltar }) {
         </div>
         <div className="viewer-state">
           <strong>URL de painel inválida.</strong>
-          <small>edite o indicador e informe um endereço http ou https.</small>
+          <small>edite o indicador e informe um link público ou endereço reportEmbed válido do Power BI.</small>
         </div>
       </section>
     )

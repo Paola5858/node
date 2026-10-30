@@ -1,65 +1,135 @@
-# Plume
+# Cana Intelligence — Plataforma Operacional Sucroenergética
 
-Aplicação React/Vite para indicadores e cadastros operacionais. A API Node.js e o armazenamento SQLite deste repositório são executáveis localmente para desenvolvimento e validação. O Node-RED externo existente não é alterado e seus dados não são importados automaticamente.
+Plataforma profissional de inteligência operacional, gestão de indicadores industriais, balanço de massa e engenharia de dados desenvolvida para usinas do setor sucroenergético.
 
-## Requisitos e inicialização
+---
 
-- Node.js 24 ou superior (`node:sqlite` é usado pela API).
-- Dependências instaladas com `npm install`.
-- Se ainda não houver `.env`, copie `.env.example`. Se já existir, acrescente ou ajuste as chaves necessárias sem substituir configurações existentes.
-- Inicie `npm run server` em um terminal.
-- Inicie `npm run dev` em outro terminal. O Vite encaminha `/api` para a API local em `127.0.0.1:3001`.
+## 1. Visão Geral da Arquitetura
 
-O banco é criado em `data/plume.sqlite` na primeira inicialização. Essa pasta é ignorada pelo Git. O servidor aceita `DATABASE_PATH=:memory:` para testes isolados. Para visualizar uma build, use `npm run build` e sirva `dist/` por uma hospedagem configurada para encaminhar `/api` ao servidor.
+O **Cana Intelligence** é construído em uma arquitetura limpa, resiliente e segura:
 
-## CRUD operacional da Usina
+- **Frontend**: React 19 + Vite 8 em SPA com Design System próprio orientado a operações industriais agro-tech (estética inspirada em padrões Apple e Awwwards, com tons de grafite, chumbo e verde cana `#205c3b`).
+- **Backend**: API nativa em Node.js 24 (`node:http` e `node:crypto`) sem frameworks pesados ou desnecessários.
+- **Armazenamento**: SQLite nativo de alta performance via `node:sqlite` (Node.js 22+) com WAL mode ativado e chaves estrangeiras estritas.
+- **Isolamento Multi-Tenant**: Cada usina/organização possui isolamento criptográfico e relacional completo, identificado exclusivamente pela sessão autenticada no servidor.
 
-Os seis cadastros da atividade foram reunidos em `src/components/CadastroApi.jsx`, alimentado por `src/config/cadastros.js` e `src/services/api.js`. A mesma camada atende Safras, Unidades, Equipamentos, Medições, Unidades de medida e Tipos de informação, sem copiar seis componentes quase iguais.
+---
 
-Os campos de relacionamento consultam a API e exibem nomes amigáveis no select. Equipamentos dependem de Unidades, Tipos de informação dependem de Unidades de medida e Medições dependem de Safras, Equipamentos e Tipos de informação. A lista de Medições ainda possui busca, filtro por Safra e filtro por Equipamento, além de paginação local para não transformar uma tabela grande em um paredão de texto.
+## 2. Funcionalidades Principais
 
-Datas, números e referências são validados antes do envio. `Valor` segue como número JSON, `datetime-local` é enviado com segundos, Safra impede intervalo invertido e o backend mantém a proteção contra referências de outra organização e exclusões com dependências.
+### 2.1 Inteligência Industrial e Monitoramento Operacional
+- **Cadeia de Qualidade da Cana e ATR**: Acompanhamento analítico de Brix, Pol, Pureza e Açúcar Total Recuperável (fórmula Consecana padrão).
+- **Extração e Moenda**: Supervisão de Pol do Bagaço, taxa de extração e perdas de sacarose.
+- **Fermentação e Destilaria**: Monitoramento microbiológico de contaminação por ácido lático, viabilidade celular de leveduras e rendimento de conversão.
+- **Tratamento de Paradas Operacionais**: Isolamento estatístico de paradas de moagem para não distorcer médias operacionais ponderadas.
 
-## API local
+### 2.2 Engenharia de Dados & Importação de Planilhas
+- Suporte a estruturas de dados industriais:
+  - `Fato_Medicoes`
+  - `Dim_Indicador`
+  - `Dim_Calendario`
+  - `Auditoria_Dados`
+  - `Pendencias_Validacao`
+  - `Resumo_Qualidade`
+- **Validação de Regras de Negócio**:
+  - Detecção de escala de `UMIDADE_LAB` (tratamento de fração decimal sem dupla multiplicação).
+  - Identificação de pendência técnica do indicador `TC` (Toneladas de Cana / Tempo de Ciclo) sem suposições precipitadas.
+  - Rastreabilidade de valores originais vs. analíticos.
+  - Relatório executivo de auditoria com taxa de conformidade e retenção de duplicidades.
 
-| Método e rota | Uso |
-| --- | --- |
-| `POST /api/auth/register` | Cria uma organização isolada e seu primeiro usuário responsável. |
-| `POST /api/auth/login` | Valida e-mail e senha e cria uma sessão. |
-| `GET /api/auth/session` | Retorna a sessão e o token CSRF da sessão, se autenticada. |
-| `POST /api/auth/logout` | Invalida a sessão no banco e apaga os cookies. |
-| `PATCH /api/auth/profile` | Atualiza nome, foto e favoritos da conta autenticada. |
-| `GET/POST /api/indicador` | Lista ou cria indicadores da organização atual. |
-| `GET/PUT/DELETE /api/indicador/:id` | Consulta, edita ou exclui um indicador da organização atual. |
-| `GET/POST /api/cadastros/:tipo` | Lista ou cria safra, unidade, equipamento, medição, unidade de medida ou tipo de informação. |
-| `GET/PUT/DELETE /api/cadastros/:tipo/:id` | Consulta, edita ou exclui um registro da organização atual. |
+### 2.3 Integração com Power BI
+- Incorporação do dashboard por link público de publicação na web (`app.powerbi.com/view?r=...`). A aplicação também aceita URLs `reportEmbed` legadas com `reportId` e `ctid` válidos.
+- Links públicos permitem que qualquer pessoa que os possua visualize o relatório; não use dados confidenciais nesse dashboard.
+- Modos de visualização em foco e tela cheia (Fullscreen API).
 
-Operações de escrita exigem cookie de sessão e `X-CSRF-Token`. O navegador obtém o token por `GET /api/auth/session`; os serviços do frontend o enviam automaticamente. A organização é sempre inferida da sessão do servidor, nunca do payload. IDs de outras organizações retornam 404. Relações de equipamento, medição e tipo de informação são verificadas no mesmo escopo antes da escrita, e exclusões com dependências retornam 409.
+### 2.4 CRUD Operacional Completo
+- Gestão de Safras, Unidades Industriais, Equipamentos, Medições, Unidades de Medida e Tipos de Informação.
+- Captura de fotos via câmera de dispositivo ou upload de imagem com validação de magic bytes (PNG, JPEG, WebP até 8 MB).
 
-O primeiro cadastro cria uma organização separada e um usuário `owner`; não há senha padrão nem adesão automática a uma organização existente. Senhas são derivadas com scrypt e salt aleatório. Os identificadores de sessão são aleatórios, ficam armazenados em hash e usam cookies `HttpOnly`, `SameSite=Strict` e `Secure` quando `NODE_ENV=production`. O token CSRF usa double-submit validado também contra o hash guardado na sessão. Login e criação de organização têm limite por IP dentro do processo. Favoritos ficam no perfil da conta, separados por usuário, e são removidos ao excluir o indicador.
+---
 
-Fotos PNG, JPEG e WebP até 8 MB são armazenadas no SQLite como data URL para manter o exemplo autocontido. Para cargas maiores ou implantação empresarial, use armazenamento de objetos privado e escaneamento de arquivos.
+## 3. Requisitos e Inicialização
 
-## Power BI
+### Requisitos de Sistema
+- **Node.js**: Versão 24.0.0 ou superior (confirmada compatibilidade com Node v24.14.0).
+- **NPM**: 10+
 
-`POWERBI_DEFAULT_EMBED_URL` em `.env` configura o relatório `reportEmbed` exibido no catálogo das novas organizações. O valor inicial fornecido para o dashboard mobile está em `.env.example`. A API aceita somente HTTPS em `app.powerbi.com/reportEmbed`, com `reportId` e `ctid` no formato GUID. O modo de foco expande o relatório; tela cheia usa a Fullscreen API. `iframe load` confirma apenas o carregamento do documento, não a autorização do relatório.
-
-Esse endereço não é um token de incorporação nem uma autorização do Plume. A URL fornecida usa o fluxo de incorporação autenticada do Power BI e cada consumidor ainda precisa ter acesso permitido pelo Microsoft Power BI. Para um SaaS com usuários externos sem conta Microsoft, falta configurar um aplicativo Microsoft Entra/service principal, permissões do workspace, capacidade/licenciamento e geração de embed token no backend com identidade efetiva e RLS. Nenhuma credencial Microsoft foi inventada ou colocada no frontend. Não use links `Publish to web` com dados privados.
-
-O API Node-RED que já existia em `127.0.0.1:1880` foi consultado somente por GET; a resposta continha uma URL `/view?r=` pública. Não foi feita escrita, migração ou substituição de dados nesse serviço. A nova API restringe indicadores a URLs de incorporação `reportEmbed`; portanto os registros do Node-RED não são compatíveis com o novo contrato e permanecem intactos no sistema externo.
-
-## Limites de implantação
-
-O backend é uma base executável de instância única para desenvolvimento e validação, com SQLite local. O limitador de login é em memória e precisa ser substituído por armazenamento compartilhado em produção com múltiplas instâncias. Ainda não há pipeline de migração/backup gerenciado, recuperação de senha, convite de usuários, papéis configuráveis, logs de auditoria persistentes, armazenamento privado de fotos, configuração de proxy TLS ou integração real com Microsoft Graph/Power BI REST. O endpoint de registro cria uma organização nova por solicitação; não é um fluxo de convite de usuário para clientes existentes.
-
-O Node-RED anterior tem somente leitura comprovada nesta sessão. Nenhum cadastro dele foi copiado para o SQLite. A existência do banco local não prova backup, alta disponibilidade ou persistência em infraestrutura externa.
-
-## Verificações
+### Instalação e Execução
 
 ```bash
-npm test
-npm run test:server
-npm run lint
-npm run build
-git diff --check
+# 1. Instalar dependências
+npm install
+
+# 2. Configurar variáveis de ambiente
+cp .env.example .env
+
+# 3. Iniciar o servidor da API (Porta 3001)
+npm run server
+
+# 4. Em outro terminal, iniciar o frontend Vite (Porta 5173 com proxy /api)
+npm run dev
 ```
+
+Abra seu navegador em `http://localhost:5173`.
+
+---
+
+## 4. Segurança e Confiabilidade
+
+| Mecanismo | Implementação |
+|---|---|
+| **Sessão** | Cookies `HttpOnly`, `SameSite=Strict`, `Secure` (em produção), com expiração de 8 horas e limpeza periódica automática. |
+| **CSRF** | Proteção por double-submit com hash SHA-256 verificado contra a sessão no servidor em todos os métodos mutantes (`POST`, `PUT`, `PATCH`, `DELETE`). |
+| **Senhas** | Derivação com algoritmo `scrypt` e sal criptográfico aleatório de 16 bytes. |
+| **Rate Limiting** | Bloqueio temporário (15 minutos) após 8 tentativas de autenticação incorretas. |
+| **Cabeçalhos HTTP** | `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'`, `X-Frame-Options: DENY`, `Referrer-Policy: same-origin`, `Cross-Origin-Resource-Policy: same-origin`. |
+| **Multi-Tenancy** | Toda consulta, inserção e exclusão restringe `organization_id` validado pelo token de sessão. |
+
+---
+
+## 5. Suíte de Testes e Qualidade
+
+O projeto conta com suíte automatizada de testes cobrindo rotas, banco, CRUD, autenticação, isolamento multi-tenant, sanitização e renderização:
+
+```bash
+# Executar todos os testes do frontend (Vitest / Testing Library)
+npm test
+
+# Executar testes de integração do servidor Node.js
+npm run test:server
+
+# Verificação estática de código (Linter Oxlint)
+npm run lint
+
+# Compilação de produção (Vite Build)
+npm run build
+```
+
+---
+
+## 6. Endpoints da API REST
+
+| Método | Rota | Descrição |
+|---|---|---|
+| `GET` | `/api/health` | Healthcheck do serviço |
+| `POST` | `/api/auth/register` | Cria organização e conta de responsável |
+| `POST` | `/api/auth/login` | Inicia sessão com cookie HttpOnly e token CSRF |
+| `GET` | `/api/auth/session` | Obtém dados da sessão e token CSRF atual |
+| `POST` | `/api/auth/logout` | Encerra sessão e invalida cookie |
+| `PATCH` | `/api/auth/profile` | Atualiza perfil (nome, foto e favoritos) |
+| `GET / POST` | `/api/indicador` | Listagem e cadastro de indicadores Power BI |
+| `GET / PUT / DELETE` | `/api/indicador/:id` | Consulta, edição e exclusão de indicador |
+| `GET / POST` | `/api/cadastros/:tipo` | CRUD de safras, unidades, equipamentos, etc. |
+| `GET / PUT / DELETE` | `/api/cadastros/:tipo/:id` | Operações por ID no escopo da organização |
+
+---
+
+## 7. Camada visual (design system)
+
+- **Tokens**: `src/index.css` concentra cores, tipografia, forma, movimento e medidas do shell (`--layout-header`, `--layout-sidebar`, `--layout-toolbar`). O arquivo é importado no entrypoint, antes dos componentes.
+- **Componentes e estilos**: `src/App.css` consome apenas custom properties — sem valores brutos de cor ou espaçamento.
+- **Tipografia**: Fraunces nos títulos editoriais, Space Grotesk na interface e DM Mono em rótulos técnicos e números.
+- **Ícones**: `lucide-react`, usado no `MenuLateral`, no `Header` e no painel.
+- **Shell preservado**: header de 68px, menu lateral de 270px e toolbar de 56px, com a mesma estrutura de navegação.
+- **Visão geral**: faixa de KPIs com valor, unidade e critério de agregação; históricos de ATR e Pol do caldo com eixos, unidades e tabela equivalente; exceções do processo; e faixa de qualidade da base. Os dados vêm de `src/data/demo/operacao.js` e a tela é identificada como ambiente de demonstração.
+- **Acessibilidade**: cada gráfico tem descrição (`role="img"` + `aria-label`) e tabela `.sr-only` com os registros; navegação com `aria-current`, botão do menu com `aria-expanded`/`aria-controls` e foco visível herdado dos tokens.

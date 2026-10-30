@@ -4,7 +4,8 @@ import { promisify } from 'node:util'
 const scrypt = promisify(scryptCallback)
 const SESSION_SECONDS = 60 * 60 * 8
 const MAX_BODY_BYTES = 12 * 1024 * 1024
-const reportPadrao = 'https://app.powerbi.com/reportEmbed?reportId=22450b7a-e0c7-4472-a33a-becc7adaa99e&autoAuth=true&ctid=b1051c4b-3b94-41ab-9441-e73a72342fdd'
+const reportPadraoLegado = 'https://app.powerbi.com/reportEmbed?reportId=022d42c1-d543-4a0d-9bd8-f3ac742a7ff1&autoAuth=true&ctid=b1051c4b-3b94-41ab-9441-e73a72342fdd'
+const reportPadrao = 'https://app.powerbi.com/view?r=eyJrIjoiYzBjZTIzNDQtNjcxNi00NmEwLTg1NzQtMDQ3YWE3M2ZkZDEwIiwidCI6ImIxMDUxYzRiLTNiOTQtNDFhYi05NDQxLWU3M2E3MjM0MmZkZCJ9'
 const kinds = new Set(['safra', 'unidade', 'equipamento', 'medicao', 'unidademedida', 'tipoinformacao'])
 const relations = {
   equipamento: { unidade: 'unidade' },
@@ -57,9 +58,12 @@ function validPowerBiUrl(value, trustedHosts = []) {
     const allowedHost = url.hostname === 'app.powerbi.com' || trustedHosts.includes(url.hostname)
     const reportId = url.searchParams.get('reportId')
     const tenantId = url.searchParams.get('ctid')
-    return url.protocol === 'https:' && allowedHost && url.pathname === '/reportEmbed' &&
+    const publicToken = url.searchParams.get('r') || ''
+    const publicLink = url.pathname === '/view' && /^[A-Za-z\d_-]{20,2048}$/.test(publicToken)
+    const reportEmbed = url.pathname === '/reportEmbed' &&
       /^[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}$/i.test(reportId || '') &&
       /^[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}$/i.test(tenantId || '')
+    return url.protocol === 'https:' && allowedHost && (publicLink || reportEmbed)
   } catch { return false }
 }
 function imageIsValid(value) {
@@ -99,6 +103,16 @@ export function createApiHandler({ db, secureCookies = process.env.NODE_ENV === 
   const nowIso = () => new Date().toISOString()
   const ownRecord = db.prepare('SELECT id, payload FROM records WHERE id = ? AND organization_id = ? AND kind = ?')
   const listRecords = db.prepare('SELECT id, payload FROM records WHERE organization_id = ? AND kind = ? ORDER BY id')
+  if (validPowerBiUrl(defaultPowerBiUrl, trustedPowerBiHosts)) {
+    const updateLegacy = db.prepare('UPDATE records SET payload = ?, updated_at = ? WHERE id = ?')
+    const legacyIndicators = db.prepare("SELECT id, payload FROM records WHERE kind = 'indicador'").all()
+    for (const row of legacyIndicators) {
+      const payload = JSON.parse(row.payload)
+      if (payload.Url === reportPadraoLegado) {
+        updateLegacy.run(JSON.stringify({ ...payload, Url: new URL(defaultPowerBiUrl).toString() }), nowIso(), row.id)
+      }
+    }
+  }
 
   return async function apiHandler(request, response) {
     const url = new URL(request.url, 'http://localhost')
@@ -106,13 +120,15 @@ export function createApiHandler({ db, secureCookies = process.env.NODE_ENV === 
     response.setHeader('Referrer-Policy', 'same-origin')
     response.setHeader('X-Frame-Options', 'DENY')
     response.setHeader('Cross-Origin-Resource-Policy', 'same-origin')
+    response.setHeader('Content-Security-Policy', "default-src 'none'; frame-ancestors 'none'")
     if (request.method === 'OPTIONS') return json(response, 204, null, { Allow: 'GET, POST, PUT, PATCH, DELETE, OPTIONS' })
 
+    const startMs = Date.now()
+    const pathname = url.pathname.replace(/\/$/, '')
     try {
       let body = {}
       if (!['GET', 'HEAD'].includes(request.method)) body = await readBody(request)
       if (!body || typeof body !== 'object' || Array.isArray(body)) return error(response, 400, 'envie um objeto JSON para a operação.')
-      const pathname = url.pathname.replace(/\/$/, '')
 
       if (pathname === '/api/health' && request.method === 'GET') return json(response, 200, { status: 'ok' })
 
@@ -272,8 +288,20 @@ export function createApiHandler({ db, secureCookies = process.env.NODE_ENV === 
       if (cause.status) return error(response, cause.status, cause.message)
       if (cause.code === 'ERR_SQLITE_ERROR') return error(response, 500, 'não foi possível concluir a operação no armazenamento.')
       return error(response, 500, 'erro interno do serviço.')
+    } finally {
+      if (process.env.NODE_ENV !== 'test' && !process.env.VITEST) {
+        const ms = Date.now() - startMs
+        process.stdout.write(`[${new Date().toISOString()}] ${request.method} ${pathname} - ${ms}ms\n`)
+      }
     }
   }
+}
+
+export function startSessionCleanup(db) {
+  const cleanup = db.prepare('DELETE FROM sessions WHERE expires_at <= ?')
+  return setInterval(() => {
+    try { cleanup.run(Date.now()) } catch { /* ignore */ }
+  }, 60 * 60 * 1000)
 }
 
 function cryptoRandomId() { return randomBytes(16).toString('hex') }

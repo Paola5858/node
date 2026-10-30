@@ -1,9 +1,10 @@
-import { createServer } from 'node:http'
+﻿import { createServer } from 'node:http'
 import { createDatabase } from './database.js'
-import { createApiHandler } from './app.js'
+import { createApiHandler, startSessionCleanup } from './app.js'
 
 const db = createDatabase()
 const api = createApiHandler({ db })
+startSessionCleanup(db)
 const server = createServer(async (request, response) => {
   const handled = await api(request, response)
   if (handled === false) {
