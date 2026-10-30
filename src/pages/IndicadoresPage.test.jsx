@@ -83,20 +83,21 @@ describe('IndicadoresPage', () => {
     await user.type(screen.getByLabelText(/url do painel/i), 'ftp://invalido')
     await user.click(btnSubmit)
 
-    expect(screen.getByText('use a URL reportEmbed do Power BI com reportId e ctid válidos')).toBeInTheDocument()
+    expect(screen.getByText('use um link público (/view?r=...) ou reportEmbed válido do Power BI')).toBeInTheDocument()
   })
 
   it('cadastra novo indicador com sucesso e atualiza a lista', async () => {
     const user = userEvent.setup()
+    const publicReportUrl = 'https://app.powerbi.com/view?r=eyJrIjoiYzBjZTIzNDQtNjcxNi00NmEwLTg1NzQtMDQ3YWE3M2ZkZDEwIiwidCI6ImIxMDUxYzRiLTNiOTQtNDFhYi05NDQxLWU3M2E3MjM0MmZkZCJ9'
     const listarMock = vi.spyOn(indicadorService, 'listar')
       .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([{ Id: 10, Nome: 'Qualidade do Solo', Descricao: 'Medições de pH', Url: 'https://app.powerbi.com/reportEmbed?reportId=22450b7a-e0c7-4472-a33a-becc7adaa99e&ctid=b1051c4b-3b94-41ab-9441-e73a72342fdd' }])
+      .mockResolvedValueOnce([{ Id: 10, Nome: 'Qualidade do Solo', Descricao: 'Medições de pH', Url: publicReportUrl }])
 
     const cadastrarMock = vi.spyOn(indicadorService, 'cadastrar').mockResolvedValue({
       Id: 10,
       Nome: 'Qualidade do Solo',
       Descricao: 'Medições de pH',
-      Url: 'https://app.powerbi.com/reportEmbed?reportId=22450b7a-e0c7-4472-a33a-becc7adaa99e&ctid=b1051c4b-3b94-41ab-9441-e73a72342fdd',
+      Url: publicReportUrl,
     })
 
     const onItemsChange = vi.fn()
@@ -109,7 +110,7 @@ describe('IndicadoresPage', () => {
 
     await user.type(screen.getByLabelText(/^nome/i), 'Qualidade do Solo')
     await user.type(screen.getByLabelText(/^descrição/i), 'Medições de pH')
-    await user.type(screen.getByLabelText(/url do painel/i), 'https://app.powerbi.com/reportEmbed?reportId=22450b7a-e0c7-4472-a33a-becc7adaa99e&ctid=b1051c4b-3b94-41ab-9441-e73a72342fdd')
+    await user.type(screen.getByLabelText(/url do painel/i), publicReportUrl)
 
     await user.click(screen.getByRole('button', { name: /cadastrar indicador/i }))
 
@@ -117,7 +118,7 @@ describe('IndicadoresPage', () => {
       expect(cadastrarMock).toHaveBeenCalledWith({
         Nome: 'Qualidade do Solo',
         Descricao: 'Medições de pH',
-        Url: 'https://app.powerbi.com/reportEmbed?reportId=22450b7a-e0c7-4472-a33a-becc7adaa99e&ctid=b1051c4b-3b94-41ab-9441-e73a72342fdd',
+        Url: publicReportUrl,
       })
       expect(screen.getByRole('status')).toHaveTextContent(/indicador criado e menu atualizado/i)
       expect(screen.getByText('Qualidade do Solo')).toBeInTheDocument()

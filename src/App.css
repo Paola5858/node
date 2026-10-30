@@ -1190,9 +1190,21 @@
 
 .indicator-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 340px;
+  grid-template-areas: "main form";
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 340px);
   gap: 24px;
   align-items: start;
+}
+
+.indicator-main {
+  grid-area: main;
+  min-width: 0;
+}
+
+.indicator-form-card {
+  grid-area: form;
+  min-width: 0;
+  padding: 24px;
 }
 
 .indicator-toolbar {
@@ -2108,6 +2120,12 @@
   .crud-layout,
   .monitoramento-grid {
     grid-template-columns: 1fr;
+  }
+
+  .indicator-grid {
+    grid-template-areas:
+      "main"
+      "form";
   }
 
   .operation-context {

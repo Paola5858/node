@@ -23,8 +23,11 @@ function validar(form) {
     try {
       const url = new URL(form.Url)
       const guid = /^[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}$/i
-      if (url.protocol !== 'https:' || url.hostname !== 'app.powerbi.com' || url.pathname !== '/reportEmbed' || !guid.test(url.searchParams.get('reportId') || '') || !guid.test(url.searchParams.get('ctid') || '')) {
-        erros.Url = 'use a URL reportEmbed do Power BI com reportId e ctid válidos'
+      const publicToken = url.searchParams.get('r') || ''
+      const publicLink = url.pathname === '/view' && /^[A-Za-z\d_-]{20,2048}$/.test(publicToken)
+      const reportEmbed = url.pathname === '/reportEmbed' && guid.test(url.searchParams.get('reportId') || '') && guid.test(url.searchParams.get('ctid') || '')
+      if (url.protocol !== 'https:' || url.hostname !== 'app.powerbi.com' || (!publicLink && !reportEmbed)) {
+        erros.Url = 'use um link público (/view?r=...) ou reportEmbed válido do Power BI'
       }
     } catch { erros.Url = 'informe uma URL válida' }
   }
@@ -367,7 +370,7 @@ function IndicadoresPage({ sessao, initialSelectedId, onItemsChange, onSelect })
 
             <div className={`field ${erros.Url ? 'has-error' : ''}`}>
               <label htmlFor="Url">URL do painel<span>*</span></label>
-              <input id="Url" name="Url" type="url" value={form.Url} onChange={alterar} placeholder="https://app.powerbi.com/reportEmbed?reportId=...&ctid=..." />
+              <input id="Url" name="Url" type="url" value={form.Url} onChange={alterar} placeholder="https://app.powerbi.com/view?r=..." />
               {erros.Url && <small className="field-error">{erros.Url}</small>}
             </div>
 

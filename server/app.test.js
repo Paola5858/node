@@ -7,7 +7,8 @@ import { join } from 'node:path'
 import { createDatabase } from './database.js'
 import { createApiHandler } from './app.js'
 
-const reportUrl = 'https://app.powerbi.com/reportEmbed?reportId=22450b7a-e0c7-4472-a33a-becc7adaa99e&autoAuth=true&ctid=b1051c4b-3b94-41ab-9441-e73a72342fdd'
+const reportUrl = 'https://app.powerbi.com/view?r=eyJrIjoiYzBjZTIzNDQtNjcxNi00NmEwLTg1NzQtMDQ3YWE3M2ZkZDEwIiwidCI6ImIxMDUxYzRiLTNiOTQtNDFhYi05NDQxLWU3M2E3MjM0MmZkZCJ9'
+const legacyReportUrl = 'https://app.powerbi.com/reportEmbed?reportId=22450b7a-e0c7-4472-a33a-becc7adaa99e&autoAuth=true&ctid=b1051c4b-3b94-41ab-9441-e73a72342fdd'
 const testDirectory = mkdtempSync(join(tmpdir(), 'plume-api-test-'))
 const databasePath = join(testDirectory, 'integration.sqlite')
 const database = createDatabase(databasePath)
@@ -77,6 +78,23 @@ test('a sessão é criada no servidor e dados ausentes ficam anônimos', async (
   assert.deepEqual(await anonymous.json(), { user: null })
   const session = await request('/api/auth/session', { cookie: ownerA.cookie })
   assert.equal((await session.json()).user.organizationId, ownerA.user.organizationId)
+  const dashboard = await request('/api/indicador', { cookie: ownerA.cookie })
+  assert.ok((await dashboard.json()).some((item) => item.Url === reportUrl))
+})
+
+test('migra o dashboard padrão antigo para o link público configurado', () => {
+  const createdAt = new Date().toISOString()
+  const result = database.prepare('INSERT INTO records (organization_id, kind, payload, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)').run(
+    ownerA.user.organizationId,
+    'indicador',
+    JSON.stringify({ Nome: 'Dashboard', Descricao: 'Padrão antigo', Url: 'https://app.powerbi.com/reportEmbed?reportId=022d42c1-d543-4a0d-9bd8-f3ac742a7ff1&autoAuth=true&ctid=b1051c4b-3b94-41ab-9441-e73a72342fdd' }),
+    ownerA.user.id,
+    createdAt,
+    createdAt,
+  )
+  createApiHandler({ db: database, secureCookies: false, defaultPowerBiUrl: reportUrl })
+  const row = database.prepare('SELECT payload FROM records WHERE id = ?').get(result.lastInsertRowid)
+  assert.equal(JSON.parse(row.payload).Url, reportUrl)
 })
 
 test('login valida senha sem revelar a credencial esperada', async () => {
@@ -135,12 +153,22 @@ test('a organização restringe listagem, consulta e escrita por ID', async () =
   assert.deepEqual((await profile.json()).user.favoritos, [])
 })
 
-test('rejeita links públicos do Power BI e referências de outra organização', async () => {
-  const invalid = await request('/api/indicador', {
+test('aceita link público Power BI e formato reportEmbed legado; rejeita hosts externos', async () => {
+  const publico = await request('/api/indicador', {
     method: 'POST', cookie: ownerA.cookie, csrf: ownerA.csrf,
-    body: { Nome: 'Inseguro', Descricao: 'URL pública', Url: 'https://app.powerbi.com/view?r=public-token' },
+    body: { Nome: 'Dashboard público', Descricao: 'URL pública', Url: reportUrl },
   })
-  assert.equal(invalid.status, 400)
+  assert.equal(publico.status, 201)
+  const legado = await request('/api/indicador', {
+    method: 'POST', cookie: ownerA.cookie, csrf: ownerA.csrf,
+    body: { Nome: 'Dashboard legado', Descricao: 'URL reportEmbed', Url: legacyReportUrl },
+  })
+  assert.equal(legado.status, 201)
+  const externo = await request('/api/indicador', {
+    method: 'POST', cookie: ownerA.cookie, csrf: ownerA.csrf,
+    body: { Nome: 'Inseguro', Descricao: 'Host externo', Url: reportUrl.replace('app.powerbi.com', 'evil.example') },
+  })
+  assert.equal(externo.status, 400)
   const unidade = await request('/api/cadastros/unidade', { method: 'POST', cookie: ownerA.cookie, csrf: ownerA.csrf, body: { nome: 'Unidade A' } })
   const unidadeId = (await unidade.json()).Id
   const equipamentoCruzaTenant = await request('/api/cadastros/equipamento', {

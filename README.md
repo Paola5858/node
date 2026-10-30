@@ -38,10 +38,8 @@ O **Cana Intelligence** é construído em uma arquitetura limpa, resiliente e se
   - Relatório executivo de auditoria com taxa de conformidade e retenção de duplicidades.
 
 ### 2.3 Integração com Power BI
-- Incorporação de relatórios via `reportEmbed` seguro com validação rígida de GUID e hostname (`app.powerbi.com`).
-- Relatório configurado:
-  - **Report ID**: `022d42c1-d543-4a0d-9bd8-f3ac742a7ff1`
-  - **Tenant ID**: `b1051c4b-3b94-41ab-9441-e73a72342fdd`
+- Incorporação do dashboard por link público de publicação na web (`app.powerbi.com/view?r=...`). A aplicação também aceita URLs `reportEmbed` legadas com `reportId` e `ctid` válidos.
+- Links públicos permitem que qualquer pessoa que os possua visualize o relatório; não use dados confidenciais nesse dashboard.
 - Modos de visualização em foco e tela cheia (Fullscreen API).
 
 ### 2.4 CRUD Operacional Completo
