@@ -1190,8 +1190,10 @@
 
 .indicator-grid {
   display: grid;
-  grid-template-areas: "main form";
-  grid-template-columns: minmax(0, 1fr) minmax(300px, 340px);
+  grid-template-areas:
+    "main"
+    "form";
+  grid-template-columns: minmax(0, 1fr);
   gap: 24px;
   align-items: start;
 }
@@ -2112,15 +2114,6 @@
 /* ==========================================================================
    RESPONSIVIDADE E DISPOSITIVOS MÓVEIS (DRAWER / OVERLAY)
    ========================================================================== */
-
-@media (max-width: 1200px) {
-  .indicator-grid {
-    grid-template-areas:
-      "main"
-      "form";
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
 
 @media (max-width: 900px) {
   .form-layout,
