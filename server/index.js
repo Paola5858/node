@@ -1,11 +1,13 @@
 ﻿import { createServer } from 'node:http'
 import { createDatabase, migrateDatabase } from './database.js'
 import { createApiHandler, startSessionCleanup } from './app.js'
+import { startImportWorker } from './importWorker.js'
 
 const db = createDatabase()
 await migrateDatabase(db)
 const api = createApiHandler({ db })
 startSessionCleanup(db)
+const stopImportWorker = startImportWorker(db)
 const server = createServer(async (request, response) => {
   const handled = await api(request, response)
   if (handled === false) {
@@ -16,5 +18,8 @@ const server = createServer(async (request, response) => {
 const port = Number(process.env.API_PORT || 3001)
 server.listen(port, '127.0.0.1', () => console.log(`Plume API pronta em http://127.0.0.1:${port}`))
 for (const signal of ['SIGINT', 'SIGTERM']) {
-  process.on(signal, () => server.close(async () => { await db.close(); process.exit(0) }))
+  process.on(signal, async () => {
+    await stopImportWorker()
+    server.close(async () => { await db.close(); process.exit(0) })
+  })
 }

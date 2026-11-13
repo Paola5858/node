@@ -32,7 +32,12 @@ async function requisicao(url, opcoes = {}) {
   if (texto.trim()) {
     try { dados = JSON.parse(texto) } catch { throw new Error('a API respondeu um conteúdo inválido.') }
   }
-  if (!resposta.ok) throw new Error(dados?.message || dados?.erro || `erro HTTP ${resposta.status}`)
+  if (!resposta.ok) {
+    const failure = new Error(dados?.message || dados?.erro || `erro HTTP ${resposta.status}`)
+    failure.status = resposta.status
+    failure.data = dados
+    throw failure
+  }
   return dados
 }
 
@@ -76,6 +81,78 @@ export async function preservarArquivoOriginal(file, { unitId, frontId } = {}) {
       ...(frontId === undefined ? {} : { frontId }),
     }),
   })
+}
+
+export async function criarLoteImportacao(file, { unitId, harvestId, entityType = 'measurements', sourceName, frontId, reprocessOf } = {}) {
+  const extension = file.name.slice(file.name.lastIndexOf('.')).toLowerCase()
+  const contentType = {
+    '.csv': 'text/csv',
+    '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  }[extension]
+  if (!contentType) throw new Error('selecione um arquivo CSV ou XLSX.')
+  if (file.size > 9 * 1024 * 1024) throw new Error('o arquivo ultrapassa o limite permitido de 9 MB.')
+  const bytes = new Uint8Array(await file.arrayBuffer())
+  let binary = ''
+  for (let offset = 0; offset < bytes.length; offset += 32_768) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 32_768))
+  }
+  return requisicao(`${apiBase}/imports`, {
+    method: 'POST',
+    body: JSON.stringify({
+      fileName: file.name,
+      contentType,
+      base64: btoa(binary),
+      unitId,
+      harvestId,
+      entityType,
+      sourceName,
+      ...(frontId === undefined ? {} : { frontId }),
+      ...(reprocessOf === undefined ? {} : { reprocessOf }),
+    }),
+  })
+}
+
+export async function obterOpcoesImportacao() {
+  return requisicao(`${apiBase}/imports/options`)
+}
+
+export async function gerarPreviaImportacao(id, sheetName = '') {
+  return requisicao(`${apiBase}/imports/${encodeURIComponent(id)}/preview`, {
+    method: 'POST',
+    body: JSON.stringify({ sheetName }),
+  })
+}
+
+export async function confirmarImportacao(id, { mapping, templateName = '' }) {
+  return requisicao(`${apiBase}/imports/${encodeURIComponent(id)}/confirm`, {
+    method: 'POST',
+    body: JSON.stringify({ mapping, templateName }),
+  })
+}
+
+export async function consultarImportacao(id) {
+  return requisicao(`${apiBase}/imports/${encodeURIComponent(id)}`)
+}
+
+export async function listarQualidadeImportacao() {
+  return requisicao(`${apiBase}/imports/quality`)
+}
+
+export async function consultarLinhasImportacao(id, queue) {
+  const query = new URLSearchParams({ queue, limit: '100' })
+  return requisicao(`${apiBase}/imports/${encodeURIComponent(id)}/rows?${query}`)
+}
+
+export async function baixarRelatorioImportacao(id) {
+  const response = await apiFetch(`${apiBase}/imports/${encodeURIComponent(id)}/report.csv`, {
+    headers: { Accept: 'text/csv' },
+  })
+  if (!response.ok) {
+    let message = `erro HTTP ${response.status}`
+    try { message = (await response.json()).message || message } catch { /* resposta pode estar vazia */ }
+    throw new Error(message)
+  }
+  return response.blob()
 }
 
 export const cadastroApi = {

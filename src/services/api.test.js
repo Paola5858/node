@@ -1,5 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { api, cadastroApi, listaDaResposta, preservarArquivoOriginal } from './api'
+import {
+  api,
+  cadastroApi,
+  criarLoteImportacao,
+  gerarPreviaImportacao,
+  confirmarImportacao,
+  listaDaResposta,
+  preservarArquivoOriginal,
+} from './api'
 
 afterEach(() => vi.restoreAllMocks())
 
@@ -59,6 +67,59 @@ describe('cliente REST dos cadastros', () => {
         unitId: 12,
         frontId: 4,
       }),
+    }))
+  })
+
+  it('envia usina, safra e fonte e preserva o conflito de hash para reprocessamento explícito', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      message: 'arquivo já importado',
+      existingBatchId: 7,
+      canReprocess: true,
+    }), { status: 409 })))
+    const file = {
+      name: 'origem.csv',
+      size: 3,
+      arrayBuffer: async () => Uint8Array.from([65, 66, 67]).buffer,
+    }
+
+    await expect(criarLoteImportacao(file, {
+      unitId: 12,
+      harvestId: 14,
+      entityType: 'loads',
+      sourceName: 'LIMS',
+      reprocessOf: 7,
+    })).rejects.toMatchObject({
+      status: 409,
+      data: { existingBatchId: 7, canReprocess: true },
+    })
+    expect(fetch).toHaveBeenCalledWith('/api/imports', expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({
+        fileName: 'origem.csv',
+        contentType: 'text/csv',
+        base64: 'QUJD',
+        unitId: 12,
+        harvestId: 14,
+        entityType: 'loads',
+        sourceName: 'LIMS',
+        reprocessOf: 7,
+      }),
+    }))
+  })
+
+  it('submits the preview mapping only after an explicit confirmation action', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(() => new Response(JSON.stringify({ id: 8, status: 'queued' }), { status: 202 })))
+    const mapping = { measured_at: 'DATA', equipment: 'EQ', indicator: 'IND', value: 'VAL', unit_of_measure: 'UOM' }
+
+    await gerarPreviaImportacao(8, 'Medições')
+    expect(fetch).toHaveBeenLastCalledWith('/api/imports/8/preview', expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({ sheetName: 'Medições' }),
+    }))
+    await confirmarImportacao(8, { mapping, templateName: 'LIMS diário' })
+    expect(fetch).toHaveBeenLastCalledWith('/api/imports/8/confirm', expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({ mapping, templateName: 'LIMS diário' }),
     }))
   })
 })

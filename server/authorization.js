@@ -11,10 +11,10 @@ const scopedWriteModules = [
   'units', 'harvests', 'equipment', 'measurements', 'quality', 'imports', 'occurrences', 'catalogs',
 ]
 const departmentModules = {
-  qualidade: ['quality', 'measurements', 'rules', 'imports', 'analytics', 'reports', 'periods', 'catalogs'],
-  laboratorio: ['quality', 'measurements', 'imports', 'analytics', 'reports', 'catalogs'],
+  qualidade: ['units', 'harvests', 'equipment', 'quality', 'measurements', 'rules', 'imports', 'analytics', 'reports', 'periods', 'catalogs'],
+  laboratorio: ['units', 'harvests', 'equipment', 'quality', 'measurements', 'imports', 'analytics', 'reports', 'catalogs'],
   agricola: ['units', 'harvests', 'equipment', 'imports', 'analytics', 'reports', 'occurrences', 'periods', 'catalogs'],
-  industrial: ['units', 'equipment', 'measurements', 'quality', 'imports', 'analytics', 'reports', 'occurrences', 'periods', 'catalogs'],
+  industrial: ['units', 'harvests', 'equipment', 'measurements', 'quality', 'imports', 'analytics', 'reports', 'occurrences', 'periods', 'catalogs'],
   ti: modules,
 }
 

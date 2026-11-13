@@ -1,5 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { createServer } from 'node:http'
 import { createApiHandler } from './app.js'
 import { createDatabase, migrateDatabase } from './database.js'
@@ -24,7 +25,22 @@ test('PostgreSQL API isolates tenants, unit scopes, exports, attachments, and pr
 }, async (t) => {
   const db = createDatabase({ environment: 'DEV' })
   await migrateDatabase(db)
-  const api = createApiHandler({ db, secureCookies: false })
+  const storedObjects = new Map()
+  const api = createApiHandler({
+    db,
+    secureCookies: false,
+    preserveOriginalFn: async ({ organizationId, contentType, bytes }) => {
+      const sha256 = createHash('sha256').update(bytes).digest('hex')
+      const key = `${organizationId}/originals/test-${sha256}`
+      storedObjects.set(key, { bytes, contentType })
+      return { key, sha256 }
+    },
+    retrieveOriginalFn: async ({ objectKey }) => {
+      const object = storedObjects.get(objectKey)
+      if (!object) throw Object.assign(new Error('arquivo original não encontrado.'), { status: 404 })
+      return object
+    },
+  })
   const server = createServer(async (request, response) => {
     const handled = await api(request, response)
     if (handled === false) response.writeHead(404).end()
@@ -161,6 +177,12 @@ test('PostgreSQL API isolates tenants, unit scopes, exports, attachments, and pr
   assert.equal((await send('/api/releases/measurements/1', {
     method: 'POST', cookie: member.cookie, csrf: member.csrf, body: { justification: 'tentativa operacional' },
   })).status, 403)
+  assert.equal((await send('/api/rules', {
+    method: 'POST',
+    cookie: member.cookie,
+    csrf: member.csrf,
+    body: { indicatorId: 1, name: 'Faixa operacional', version: '1', minimumValue: 0, maximumValue: 25 },
+  })).status, 403)
 
   const adminContext = {
     organizationId: tenantA.user.organizationId,
@@ -171,6 +193,116 @@ test('PostgreSQL API isolates tenants, unit scopes, exports, attachments, and pr
     accessLevel: 'strategic',
     department: 'ti',
   }
+  const brix = await db.query(
+    `INSERT INTO indicator_definitions (organization_id, name, description)
+     VALUES ($1,'BRIX','Indicador para testes de importação') RETURNING id`,
+    [tenantA.user.organizationId],
+    adminContext,
+  )
+  const draftRule = await send('/api/rules', {
+    method: 'POST',
+    cookie: tenantA.cookie,
+    csrf: tenantA.csrf,
+    body: {
+      indicatorId: Number(brix.rows[0].id),
+      name: 'Faixa BRIX homologada',
+      version: '1',
+      minimumValue: 0,
+      maximumValue: 22,
+    },
+  })
+  assert.equal(draftRule.status, 201)
+  const createdRule = await draftRule.json()
+  assert.equal(createdRule.status, 'draft')
+  const homologatedRule = await send(`/api/rules/${createdRule.id}/homologate`, {
+    method: 'POST',
+    cookie: tenantA.cookie,
+    csrf: tenantA.csrf,
+    body: { justification: 'limites técnicos revisados' },
+  })
+  assert.equal(homologatedRule.status, 200)
+  const harvest = await db.query(
+    `INSERT INTO harvests (organization_id, name, starts_on, ends_on, unit_id)
+     VALUES ($1,$2,'2026-01-01','2026-12-31',$3) RETURNING id`,
+    [tenantA.user.organizationId, `Safra pipeline ${suffix}`, unitId],
+    adminContext,
+  )
+  const csv = `DATA_HORA;EQUIPAMENTO;INDICADOR;VALOR;UNIDADE\n${new Date(Date.now() - 60_000).toISOString()};Equipamento pipeline;BRIX;19.5;°Bx`
+  const fileBytes = Buffer.from(csv)
+  const uploadBody = {
+    fileName: 'medicoes-pipeline.csv',
+    contentType: 'text/csv',
+    base64: fileBytes.toString('base64'),
+    unitId,
+    harvestId: Number(harvest.rows[0].id),
+    sourceName: `source-pipeline-${suffix}`,
+  }
+  const upload = await send('/api/imports', {
+    method: 'POST',
+    cookie: tenantA.cookie,
+    csrf: tenantA.csrf,
+    body: uploadBody,
+  })
+  assert.equal(upload.status, 201)
+  const uploaded = await upload.json()
+  assert.equal(uploaded.status, 'uploaded')
+  assert.equal(uploaded.version, 1)
+
+  const preview = await send(`/api/imports/${uploaded.id}/preview`, {
+    method: 'POST',
+    cookie: tenantA.cookie,
+    csrf: tenantA.csrf,
+    body: {},
+  })
+  assert.equal(preview.status, 200)
+  const previewBody = await preview.json()
+  assert.equal(previewBody.totalRows, 1)
+  assert.equal(previewBody.suggestedMapping.indicator, 'INDICADOR')
+  assert.equal((await send(`/api/imports/${uploaded.id}`, { cookie: tenantA.cookie })).status, 200)
+  assert.equal((await db.query(
+    'SELECT 1 FROM raw.import_jobs WHERE organization_id=$1 AND import_batch_id=$2',
+    [tenantA.user.organizationId, uploaded.id],
+    adminContext,
+  )).rowCount, 0)
+
+  const mapping = previewBody.suggestedMapping
+  const confirmed = await send(`/api/imports/${uploaded.id}/confirm`, {
+    method: 'POST',
+    cookie: tenantA.cookie,
+    csrf: tenantA.csrf,
+    body: { mapping, templateName: 'Template LIMS' },
+  })
+  assert.equal(confirmed.status, 202)
+  assert.equal((await (await send(`/api/imports/${uploaded.id}`, { cookie: tenantA.cookie })).json()).status, 'queued')
+  assert.equal((await db.query(
+    'SELECT status FROM raw.import_jobs WHERE organization_id=$1 AND import_batch_id=$2',
+    [tenantA.user.organizationId, uploaded.id],
+    adminContext,
+  )).rows[0].status, 'queued')
+  const report = await send(`/api/imports/${uploaded.id}/report.csv`, { cookie: tenantA.cookie })
+  assert.equal(report.status, 200)
+  assert.match(report.headers.get('content-type'), /text\/csv/)
+  const duplicateUpload = await send('/api/imports', {
+    method: 'POST',
+    cookie: tenantA.cookie,
+    csrf: tenantA.csrf,
+    body: uploadBody,
+  })
+  assert.equal(duplicateUpload.status, 409)
+  const duplicateDetails = await duplicateUpload.json()
+  assert.equal(duplicateDetails.existingBatchId, uploaded.id)
+  const reprocessedUpload = await send('/api/imports', {
+    method: 'POST',
+    cookie: tenantA.cookie,
+    csrf: tenantA.csrf,
+    body: { ...uploadBody, reprocessOf: uploaded.id },
+  })
+  assert.equal(reprocessedUpload.status, 201)
+  assert.equal((await reprocessedUpload.json()).version, 2)
+  assert.equal((await send(`/api/imports/${uploaded.id}`, { cookie: tenantB.cookie })).status, 404)
+  assert.equal((await send(`/api/imports/${uploaded.id}/report.csv`, { cookie: tenantB.cookie })).status, 404)
+  assert.equal((await send(`/api/imports/${uploaded.id}/rows?queue=Pendentes`, { cookie: tenantB.cookie })).status, 404)
+
   const source = await db.query(
     `INSERT INTO sources (organization_id, name, source_type, authorized_read_only)
      VALUES ($1,'integration-test','file',true) RETURNING id`,

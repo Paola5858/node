@@ -13,7 +13,7 @@ test('authorization enforces department, operational privilege limits, and unit/
   }
 
   assert.equal(hasPermission(operator, 'quality', 'can_read'), true)
-  assert.equal(hasPermission(operator, 'units', 'can_read'), false)
+  assert.equal(hasPermission(operator, 'units', 'can_read'), true)
   assert.equal(isOperationalOrIntern(operator), true)
   assert.equal(hasUnitScope(operator, 12), true)
   assert.equal(hasUnitScope(operator, 13), false)

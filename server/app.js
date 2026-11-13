@@ -2,6 +2,7 @@ import { createHash, randomBytes, scrypt as scryptCallback, timingSafeEqual } fr
 import { promisify } from 'node:util'
 import { preserveOriginal, retrieveOriginal } from './objectStorage.js'
 import { withSecurityContext } from './database.js'
+import { parseImportFile, suggestColumnMapping, validateColumnMapping } from './importPipeline.js'
 import {
   accessRoles,
   hasFrontScope,
@@ -170,6 +171,11 @@ function publicPayload(payload) {
 function forbidden(response) {
   return error(response, 403, 'permissão insuficiente para esta operação.')
 }
+function csvCell(value) {
+  let text = String(value ?? '')
+  if (/^[\t\r ]*[=+\-@]/.test(text)) text = `'${text}`
+  return `"${text.replace(/"/g, '""')}"`
+}
 async function getRecord(db, kind, id, organizationId) {
   if (kind === 'indicador') {
     const result = await db.query(
@@ -256,6 +262,8 @@ export function createApiHandler({
   secureCookies = process.env.NODE_ENV === 'production',
   trustedPowerBiHosts = [],
   defaultPowerBiUrl = process.env.POWERBI_DEFAULT_EMBED_URL || reportPadrao,
+  preserveOriginalFn = preserveOriginal,
+  retrieveOriginalFn = retrieveOriginal,
 }) {
   const nowIso = () => new Date().toISOString()
 
@@ -572,6 +580,59 @@ export function createApiHandler({
         return json(response, 201, { entityType, id, approvedBy: authenticated.id })
       }
       const homologateMatch = pathname.match(/^\/api\/rules\/(\d+)\/homologate$/)
+      if (pathname === '/api/rules' && request.method === 'POST') {
+        if (isOperationalOrIntern(accessContext) || !hasPermission(accessContext, 'rules', 'can_write')) return forbidden(response)
+        const indicatorId = Number(body.indicatorId)
+        const name = typeof body.name === 'string' ? body.name.trim() : ''
+        const version = typeof body.version === 'string' ? body.version.trim() : ''
+        const parseBoundary = (value) => value === null || value === undefined || value === '' ||
+          (typeof value === 'string' && value.trim() === '')
+          ? null
+          : typeof value === 'number' || typeof value === 'string' ? Number(value) : Number.NaN
+        const minimumValue = parseBoundary(body.minimumValue)
+        const maximumValue = parseBoundary(body.maximumValue)
+        if (!Number.isSafeInteger(indicatorId) || indicatorId < 1 || name.length < 1 || name.length > 160 || hasControlCharacter(name) ||
+          version.length < 1 || version.length > 40 || hasControlCharacter(version) ||
+          (minimumValue === null && maximumValue === null) ||
+          (minimumValue !== null && !Number.isFinite(minimumValue)) ||
+          (maximumValue !== null && !Number.isFinite(maximumValue)) ||
+          (minimumValue !== null && maximumValue !== null && minimumValue > maximumValue)) {
+          return error(response, 400, 'informe indicador, nome, versão e limites numéricos homologáveis válidos.')
+        }
+        const indicator = await db.query(
+          'SELECT id FROM indicator_definitions WHERE id=$1 AND organization_id=$2',
+          [indicatorId, organizationId], organizationId,
+        )
+        if (!indicator.rowCount) return error(response, 404, 'indicador não encontrado.')
+        const expressions = []
+        if (minimumValue !== null) expressions.push(`value >= ${minimumValue}`)
+        if (maximumValue !== null) expressions.push(`value <= ${maximumValue}`)
+        const expression = expressions.join(' AND ')
+        const rule = await db.query(
+          `INSERT INTO technical_rules
+             (organization_id, indicator_id, name, rule_expression, version, minimum_value, maximum_value)
+           VALUES ($1,$2,$3,$4,$5,$6,$7)
+           RETURNING id, name, version, minimum_value, maximum_value, homologation_status`,
+          [organizationId, indicatorId, name, expression, version, minimumValue, maximumValue],
+          organizationId,
+        )
+        await db.query(
+          `INSERT INTO audit_events (organization_id, actor_user_id, event_type, entity_type, entity_id, after_data)
+           VALUES ($1,$2,'rule_drafted','technical_rule',$3,$4::jsonb)`,
+          [organizationId, authenticated.id, String(rule.rows[0].id), JSON.stringify({
+            indicatorId, name, version, minimumValue, maximumValue,
+          })],
+          organizationId,
+        )
+        return json(response, 201, {
+          id: Number(rule.rows[0].id),
+          name: rule.rows[0].name,
+          version: rule.rows[0].version,
+          minimumValue: rule.rows[0].minimum_value,
+          maximumValue: rule.rows[0].maximum_value,
+          status: rule.rows[0].homologation_status,
+        })
+      }
       if (homologateMatch && request.method === 'POST') {
         if (isOperationalOrIntern(accessContext) || !hasPermission(accessContext, 'rules', 'can_homologate_rules')) return forbidden(response)
         const id = Number(homologateMatch[1])
@@ -659,7 +720,7 @@ export function createApiHandler({
           [id, organizationId], organizationId,
         )
         if (!batch.rowCount) return error(response, 404, 'arquivo original não encontrado.')
-        const original = await retrieveOriginal({ organizationId, objectKey: batch.rows[0].object_key })
+        const original = await retrieveOriginalFn({ organizationId, objectKey: batch.rows[0].object_key })
         const safeFilename = batch.rows[0].original_filename.replace(/[^\x20-\x7e"\\;]/g, '_')
         response.writeHead(200, {
           'Content-Type': original.contentType,
@@ -670,6 +731,248 @@ export function createApiHandler({
         })
         response.end(original.bytes)
         return true
+      }
+      if (pathname === '/api/imports/options' && request.method === 'GET') {
+        if (!hasPermission(accessContext, 'imports', 'can_read')) return forbidden(response)
+        const [units, harvests, sources] = await Promise.all([
+          db.query('SELECT id, name FROM units WHERE organization_id=$1 ORDER BY name', [organizationId], organizationId),
+          db.query('SELECT id, name, unit_id FROM harvests WHERE organization_id=$1 ORDER BY starts_on DESC, name', [organizationId], organizationId),
+          db.query('SELECT id, name FROM sources WHERE organization_id=$1 AND source_type=\'file\' ORDER BY name', [organizationId], organizationId),
+        ])
+        return json(response, 200, {
+          units: units.rows.map((row) => ({ id: Number(row.id), name: row.name })),
+          harvests: harvests.rows.map((row) => ({ id: Number(row.id), name: row.name, unitId: row.unit_id === null ? null : Number(row.unit_id) })),
+          sources: sources.rows.map((row) => ({ id: Number(row.id), name: row.name })),
+        })
+      }
+      if (pathname === '/api/imports/quality' && request.method === 'GET') {
+        if (!hasPermission(accessContext, 'imports', 'can_read') || !hasPermission(accessContext, 'analytics', 'can_read')) return forbidden(response)
+        const batches = await db.query(
+          `SELECT b.id, b.original_filename, b.status, b.received_at, b.processed_at,
+                  f.received_count, f.accepted_count, f.rejected_count, f.suspect_count,
+                  f.pending_count, f.quality_metrics
+           FROM analytics.fact_imports_quality f
+           JOIN raw.import_batches b
+             ON b.organization_id=f.organization_id AND b.id=f.import_batch_id
+           WHERE f.organization_id=$1
+           ORDER BY b.received_at DESC
+           LIMIT 30`,
+          [organizationId], organizationId,
+        )
+        return json(response, 200, batches.rows.map((row) => ({
+          ...row,
+          id: Number(row.id),
+          receivedCount: Number(row.received_count),
+          acceptedCount: Number(row.accepted_count),
+          rejectedCount: Number(row.rejected_count),
+          suspectCount: Number(row.suspect_count),
+          pendingCount: Number(row.pending_count),
+        })))
+      }
+      const reportMatch = pathname.match(/^\/api\/imports\/(\d+)\/report\.csv$/)
+      if (reportMatch && request.method === 'GET') {
+        if (!hasPermission(accessContext, 'imports', 'can_read') || !hasPermission(accessContext, 'imports', 'can_export')) return forbidden(response)
+        const batchId = Number(reportMatch[1])
+        const batch = await db.query(
+          'SELECT id, original_filename FROM import_batches WHERE id=$1 AND organization_id=$2',
+          [batchId, organizationId], organizationId,
+        )
+        if (!batch.rowCount) return error(response, 404, 'lote de importação não encontrado.')
+        const rows = await db.query(
+          `SELECT source_row_number, row_queue, raw_payload, validation_issues
+           FROM raw_import_rows
+           WHERE organization_id=$1 AND import_batch_id=$2
+             AND row_queue IN ('Rejeitados', 'Suspeitos')
+           ORDER BY source_row_number`,
+          [organizationId, batchId], organizationId,
+        )
+        const output = [['linha', 'fila', 'categoria', 'codigo', 'motivo_tecnico', 'dados_originais']
+          .map(csvCell).join(',')]
+        for (const row of rows.rows) {
+          const issues = Array.isArray(row.validation_issues) ? row.validation_issues : []
+          for (const issue of issues) {
+            output.push([
+              row.source_row_number,
+              row.row_queue,
+              issue.category,
+              issue.code,
+              issue.message,
+              JSON.stringify(row.raw_payload),
+            ].map(csvCell).join(','))
+          }
+        }
+        const filename = `importacao-${batchId}-erros.csv`
+        response.writeHead(200, {
+          'Content-Type': 'text/csv; charset=utf-8',
+          'Content-Disposition': `attachment; filename="${filename}"`,
+          'Cache-Control': 'no-store',
+          'X-Content-Type-Options': 'nosniff',
+        })
+        response.end(`\uFEFF${output.join('\r\n')}`)
+        return true
+      }
+      const rowsMatch = pathname.match(/^\/api\/imports\/(\d+)\/rows$/)
+      if (rowsMatch && request.method === 'GET') {
+        if (!hasPermission(accessContext, 'imports', 'can_read')) return forbidden(response)
+        const batchId = Number(rowsMatch[1])
+        const queue = url.searchParams.get('queue')
+        const allowedQueues = new Set(['Aceitos', 'Rejeitados', 'Suspeitos', 'Pendentes'])
+        if (!allowedQueues.has(queue)) return error(response, 400, 'informe uma fila de importação válida.')
+        const limit = Number(url.searchParams.get('limit') || 50)
+        const offset = Number(url.searchParams.get('offset') || 0)
+        if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100 || !Number.isSafeInteger(offset) || offset < 0) {
+          return error(response, 400, 'paginação inválida.')
+        }
+        const batch = await db.query(
+          'SELECT id FROM import_batches WHERE id=$1 AND organization_id=$2',
+          [batchId, organizationId], organizationId,
+        )
+        if (!batch.rowCount) return error(response, 404, 'lote de importação não encontrado.')
+        const result = await db.query(
+          `SELECT source_row_number, row_queue, raw_payload, validation_issues, normalized_payload
+           FROM raw_import_rows
+           WHERE organization_id=$1 AND import_batch_id=$2 AND row_queue=$3
+           ORDER BY source_row_number
+           LIMIT $4 OFFSET $5`,
+          [organizationId, batchId, queue, limit, offset], organizationId,
+        )
+        return json(response, 200, {
+          rows: result.rows.map((row) => ({
+            sourceRowNumber: Number(row.source_row_number),
+            queue: row.row_queue,
+            raw: row.raw_payload,
+            issues: row.validation_issues,
+            normalized: row.normalized_payload,
+          })),
+          limit,
+          offset,
+        })
+      }
+      const previewMatch = pathname.match(/^\/api\/imports\/(\d+)\/preview$/)
+      if (previewMatch && request.method === 'POST') {
+        if (!hasPermission(accessContext, 'imports', 'can_read')) return forbidden(response)
+        const batchId = Number(previewMatch[1])
+        const batch = await db.query(
+          `SELECT id, source_id, object_key, original_filename, selected_sheet, mapping_json, entity_type, status
+           FROM import_batches WHERE id=$1 AND organization_id=$2`,
+          [batchId, organizationId], organizationId,
+        )
+        if (!batch.rowCount) return error(response, 404, 'lote de importação não encontrado.')
+        if (!['uploaded', 'previewed'].includes(batch.rows[0].status)) return error(response, 409, 'este lote não pode gerar uma nova prévia.')
+        const requestedSheet = typeof body.sheetName === 'string' ? body.sheetName : batch.rows[0].selected_sheet || ''
+        const original = await retrieveOriginalFn({ organizationId, objectKey: batch.rows[0].object_key })
+        const document = await parseImportFile(original.bytes, batch.rows[0].original_filename, requestedSheet)
+        const mapping = batch.rows[0].mapping_json || suggestColumnMapping(document.headers, batch.rows[0].entity_type)
+        await db.query(
+          `UPDATE import_batches
+           SET status='previewed', selected_sheet=$3, previewed_at=now()
+           WHERE id=$1 AND organization_id=$2`,
+          [batchId, organizationId, document.selectedSheet || null], organizationId,
+        )
+        const templates = await db.query(
+          `SELECT id, name, sheet_name, mapping_json
+           FROM import_mapping_templates
+           WHERE organization_id=$1 AND source_id=$2 AND entity_type=$3
+           ORDER BY name`,
+          [organizationId, batch.rows[0].source_id, batch.rows[0].entity_type], organizationId,
+        )
+        return json(response, 200, {
+          id: batchId,
+          sheets: document.sheetNames,
+          selectedSheet: document.selectedSheet,
+          headers: document.headers,
+          suggestedMapping: mapping,
+          templates: templates.rows.map((template) => ({
+            id: Number(template.id), name: template.name, sheetName: template.sheet_name, mapping: template.mapping_json,
+          })),
+          totalRows: document.rows.length,
+          rows: document.rows.slice(0, 25).map((row) => ({ rowNumber: row.rowNumber, values: row.raw })),
+        })
+      }
+      const confirmMatch = pathname.match(/^\/api\/imports\/(\d+)\/confirm$/)
+      if (confirmMatch && request.method === 'POST') {
+        if (!hasPermission(accessContext, 'imports', 'can_write')) return forbidden(response)
+        const batchId = Number(confirmMatch[1])
+        const batchResult = await db.query(
+          `SELECT id, source_id, object_key, original_filename, selected_sheet, entity_type, status
+           FROM import_batches WHERE id=$1 AND organization_id=$2`,
+          [batchId, organizationId], organizationId,
+        )
+        const batch = batchResult.rows[0]
+        if (!batch) return error(response, 404, 'lote de importação não encontrado.')
+        if (batch.status !== 'previewed') return error(response, 409, 'a prévia obrigatória precisa ser concluída antes da confirmação.')
+        const mapping = body.mapping
+        const original = await retrieveOriginalFn({ organizationId, objectKey: batch.object_key })
+        const document = await parseImportFile(original.bytes, batch.original_filename, batch.selected_sheet || '')
+        const mappingError = validateColumnMapping(mapping, document.headers, batch.entity_type)
+        if (mappingError) return error(response, 400, mappingError)
+        const templateName = typeof body.templateName === 'string' ? body.templateName.trim() : ''
+        if (templateName.length > 120 || hasControlCharacter(templateName)) return error(response, 400, 'nome de template inválido.')
+        const saved = await db.transaction(async (client) => {
+          let templateId = null
+          if (templateName) {
+            const template = await client.query(
+              `INSERT INTO import_mapping_templates
+                 (organization_id, source_id, created_by, name, sheet_name, entity_type, mapping_json)
+               VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb)
+               ON CONFLICT (organization_id, source_id, entity_type, name)
+               DO UPDATE SET created_by=EXCLUDED.created_by, sheet_name=EXCLUDED.sheet_name,
+                 mapping_json=EXCLUDED.mapping_json, updated_at=now()
+               RETURNING id`,
+              [organizationId, batch.source_id, authenticated.id, templateName, batch.selected_sheet,
+                batch.entity_type, JSON.stringify(mapping)],
+            )
+            templateId = template.rows[0].id
+          }
+          const updated = await client.query(
+            `UPDATE import_batches
+             SET status='queued', mapping_json=$3::jsonb, mapping_template_id=$4,
+                 confirmed_at=now(), confirmed_by=$5
+             WHERE id=$1 AND organization_id=$2 AND status='previewed'
+             RETURNING id`,
+            [batchId, organizationId, JSON.stringify(mapping), templateId, authenticated.id],
+          )
+          if (!updated.rowCount) return false
+          await client.query(
+            `INSERT INTO import_jobs (organization_id, import_batch_id)
+             VALUES ($1,$2)`,
+            [organizationId, batchId],
+          )
+          await client.query(
+            `INSERT INTO audit_events
+               (organization_id, actor_user_id, event_type, entity_type, entity_id, after_data)
+             VALUES ($1,$2,'import_confirmed','import_batch',$3,$4::jsonb)`,
+            [organizationId, authenticated.id, String(batchId), JSON.stringify({ status: 'queued', mappingTemplateId: templateId })],
+          )
+          return true
+        }, accessContext)
+        if (!saved) return error(response, 409, 'o lote já foi confirmado ou está sendo processado.')
+        return json(response, 202, { id: batchId, status: 'queued', message: 'lote confirmado e enviado para processamento assíncrono.' })
+      }
+      const importStatusMatch = pathname.match(/^\/api\/imports\/(\d+)$/)
+      if (importStatusMatch && request.method === 'GET') {
+        if (!hasPermission(accessContext, 'imports', 'can_read')) return forbidden(response)
+        const batchId = Number(importStatusMatch[1])
+        const batch = await db.query(
+          `SELECT id, original_filename, content_sha256, version, reprocess_of, selected_sheet, entity_type,
+                  status, received_at, previewed_at, confirmed_at, processing_started_at,
+                  processed_at, failure_message, quality_metrics
+           FROM import_batches WHERE id=$1 AND organization_id=$2`,
+          [batchId, organizationId], organizationId,
+        )
+        if (!batch.rowCount) return error(response, 404, 'lote de importação não encontrado.')
+        const queueCounts = await db.query(
+          `SELECT row_queue, count(*)::integer AS count
+           FROM raw_import_rows WHERE organization_id=$1 AND import_batch_id=$2
+           GROUP BY row_queue`,
+          [organizationId, batchId], organizationId,
+        )
+        return json(response, 200, {
+          ...batch.rows[0],
+          id: Number(batch.rows[0].id),
+          version: batch.rows[0].version === null ? null : Number(batch.rows[0].version),
+          queues: Object.fromEntries(queueCounts.rows.map((row) => [row.row_queue, row.count])),
+        })
       }
       if (pathname === '/api/imports' && request.method === 'POST') {
         if (!hasPermission(accessContext, 'imports', 'can_write')) return forbidden(response)
@@ -687,41 +990,116 @@ export function createApiHandler({
         }
         const bytes = Buffer.from(base64, 'base64')
         if (bytes.length > 9 * 1024 * 1024) return error(response, 413, 'o arquivo ultrapassa o limite permitido.')
-        let unitId = body.unitId === undefined || body.unitId === null || body.unitId === '' ? null : Number(body.unitId)
+        const unitId = Number(body.unitId)
+        const harvestId = Number(body.harvestId)
+        const entityType = typeof body.entityType === 'string' ? body.entityType : 'measurements'
         const frontId = body.frontId === undefined || body.frontId === null || body.frontId === '' ? null : Number(body.frontId)
-        if (unitId === null && accessContext.allowedUnitIds.length === 1 && accessContext.allowedUnitIds[0] !== '*') {
-          unitId = Number(accessContext.allowedUnitIds[0])
+        const sourceName = typeof body.sourceName === 'string' ? body.sourceName.trim() : 'portal-file-upload'
+        if (!Number.isSafeInteger(unitId) || unitId < 1 || !Number.isSafeInteger(harvestId) || harvestId < 1 ||
+          !['measurements', 'loads', 'quality_analyses'].includes(entityType) ||
+          sourceName.length < 1 || sourceName.length > 120 || hasControlCharacter(sourceName)) {
+          return error(response, 400, 'selecione uma usina, uma safra e uma fonte válidas.')
         }
-        if (unitId !== null && (!Number.isSafeInteger(unitId) || !hasUnitScope(accessContext, unitId))) return forbidden(response)
-        if (unitId === null && accessContext.accessLevel !== 'strategic') return forbidden(response)
+        if (!hasUnitScope(accessContext, unitId)) return forbidden(response)
         if (frontId !== null && (!Number.isSafeInteger(frontId) || !hasFrontScope(accessContext, frontId))) return forbidden(response)
-        if (unitId !== null) {
-          const unit = await db.query('SELECT id FROM units WHERE id=$1 AND organization_id=$2', [unitId, organizationId], organizationId)
-          if (!unit.rowCount) return error(response, 404, 'usina não encontrada.')
-        }
+        const harvest = await db.query(
+          'SELECT id FROM harvests WHERE id=$1 AND organization_id=$2 AND unit_id=$3',
+          [harvestId, organizationId, unitId], organizationId,
+        )
+        if (!harvest.rowCount) return error(response, 404, 'safra não encontrada para a usina selecionada.')
         if (frontId !== null) {
           const front = await db.query('SELECT id FROM fronts WHERE id=$1 AND organization_id=$2 AND unit_id=$3', [frontId, organizationId, unitId], organizationId)
           if (!front.rowCount) return error(response, 404, 'frente não encontrada.')
         }
-        const original = await preserveOriginal({ organizationId, fileName, contentType, bytes })
-        const source = await db.query(
-          "INSERT INTO sources (organization_id, name, source_type, authorized_read_only) VALUES ($1, 'portal-file-upload', 'file', true) ON CONFLICT (organization_id, name) DO NOTHING RETURNING id",
-          [organizationId], organizationId,
-        )
-        let sourceId = source.rows[0]?.id
-        if (!sourceId) {
-          const existingSource = await db.query(
-            'SELECT id FROM sources WHERE organization_id=$1 AND name=$2',
-            [organizationId, 'portal-file-upload'], organizationId,
-          )
-          if (!existingSource.rowCount) throw new Error('não foi possível criar a fonte de importação.')
-          sourceId = existingSource.rows[0].id
+        const fileHash = digest(bytes)
+        const requestedReprocess = body.reprocessOf === undefined || body.reprocessOf === null || body.reprocessOf === ''
+          ? null
+          : Number(body.reprocessOf)
+        if (requestedReprocess !== null && (!Number.isSafeInteger(requestedReprocess) || requestedReprocess < 1)) {
+          return error(response, 400, 'referência de reprocessamento inválida.')
         }
-        const batch = await db.query(
-          'INSERT INTO import_batches (organization_id, source_id, uploaded_by, unit_id, front_id, object_key, original_filename, content_sha256) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id, received_at, status',
-          [organizationId, sourceId, authenticated.id, unitId, frontId, original.key, fileName, original.sha256], organizationId,
-        )
-        return json(response, 201, { id: Number(batch.rows[0].id), fileName, sha256: original.sha256, receivedAt: batch.rows[0].received_at, status: batch.rows[0].status })
+        const result = await db.transaction(async (client) => {
+          await client.query(
+            'SELECT pg_advisory_xact_lock(hashtext($1))',
+            [`${organizationId}:${unitId}:${entityType}:${fileHash}`],
+          )
+          const duplicate = await client.query(
+            `SELECT id, status, version, original_filename
+             FROM import_batches
+             WHERE organization_id=$1 AND unit_id=$2 AND entity_type=$3 AND content_sha256=$4
+             ORDER BY received_at DESC LIMIT 1`,
+            [organizationId, unitId, entityType, fileHash],
+          )
+          let previous = null
+          let version = 1
+          if (requestedReprocess === null && duplicate.rowCount) {
+            return { duplicate: duplicate.rows[0] }
+          }
+          if (requestedReprocess !== null) {
+            const prior = await client.query(
+              `SELECT id, object_key, original_filename
+               FROM import_batches
+               WHERE id=$1 AND organization_id=$2 AND unit_id=$3 AND entity_type=$4 AND content_sha256=$5`,
+              [requestedReprocess, organizationId, unitId, entityType, fileHash],
+            )
+            if (!prior.rowCount) return { invalidReprocess: true }
+            previous = prior.rows[0]
+            const latestVersion = await client.query(
+              `SELECT COALESCE(max(version),0)::integer AS version
+               FROM import_batches
+               WHERE organization_id=$1 AND unit_id=$2 AND entity_type=$3 AND content_sha256=$4`,
+              [organizationId, unitId, entityType, fileHash],
+            )
+            version = Number(latestVersion.rows[0].version) + 1
+          }
+          const original = previous
+            ? { key: previous.object_key, sha256: fileHash }
+            : await preserveOriginalFn({ organizationId, fileName, contentType, bytes })
+          const source = await client.query(
+            `INSERT INTO sources (organization_id, name, source_type, authorized_read_only)
+             VALUES ($1,$2,'file',true)
+             ON CONFLICT (organization_id, name) DO UPDATE SET source_type='file'
+             RETURNING id`,
+            [organizationId, sourceName],
+          )
+          const created = await client.query(
+            `INSERT INTO import_batches
+               (organization_id, source_id, uploaded_by, unit_id, front_id, harvest_id, entity_type,
+                object_key, original_filename, content_sha256, status, version, reprocess_of)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'uploaded',$11,$12)
+             RETURNING id, received_at, status, version`,
+            [organizationId, source.rows[0].id, authenticated.id, unitId, frontId, harvestId,
+              entityType, original.key, fileName, fileHash, version, previous?.id || null],
+          )
+          await client.query(
+            `INSERT INTO audit_events
+               (organization_id, actor_user_id, event_type, entity_type, entity_id, after_data)
+             VALUES ($1,$2,'import_batch_created','import_batch',$3,$4::jsonb)`,
+            [organizationId, authenticated.id, String(created.rows[0].id), JSON.stringify({
+               unitId, harvestId, entityType, sourceId: Number(source.rows[0].id), sha256: fileHash,
+              version, reprocessOf: previous?.id || null,
+            })],
+          )
+          return { batch: created.rows[0] }
+        }, accessContext)
+        if (result.duplicate) {
+          return json(response, 409, {
+            message: 'este arquivo já foi importado para este tipo de dado nesta usina.',
+            existingBatchId: Number(result.duplicate.id),
+            version: result.duplicate.version === null ? null : Number(result.duplicate.version),
+            status: result.duplicate.status,
+            canReprocess: true,
+          })
+        }
+        if (result.invalidReprocess) return error(response, 404, 'lote-base não encontrado para reprocessamento.')
+        return json(response, 201, {
+          id: Number(result.batch.id),
+          fileName,
+          sha256: fileHash,
+          receivedAt: result.batch.received_at,
+          status: result.batch.status,
+          version: Number(result.batch.version),
+        })
       }
 
       const indicatorMatch = pathname.match(/^\/api\/indicador(?:\/(\d+))?$/)

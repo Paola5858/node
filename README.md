@@ -27,18 +27,14 @@ O **Cana Intelligence** é construído em uma arquitetura limpa, resiliente e se
 ### 2.2 Engenharia de Dados & Importação de Planilhas
 - Schemas PostgreSQL separados: `raw` (lotes e linhas brutas append-only), `operational` (cadastros e fatos tratados) e `analytics` (dimensões e fatos estrela). Medições tratadas mantêm originais, normalizados, regra e versão de processamento.
 - Modelo estrela compartilhável entre Portal e Dashboard, com fatos de pesagem, análises, medições industriais, paradas, qualidade de importação e ocorrências.
-- Suporte a estruturas de dados industriais:
-  - `Fato_Medicoes`
-  - `Dim_Indicador`
-  - `Dim_Calendario`
-  - `Auditoria_Dados`
-  - `Pendencias_Validacao`
-  - `Resumo_Qualidade`
-- **Validação de Regras de Negócio**:
-  - Detecção de escala de `UMIDADE_LAB` (tratamento de fração decimal sem dupla multiplicação).
-  - Identificação de pendência técnica do indicador `TC` (Toneladas de Cana / Tempo de Ciclo) sem suposições precipitadas.
-  - Rastreabilidade de valores originais vs. analíticos.
-  - Relatório executivo de auditoria com taxa de conformidade e retenção de duplicidades.
+- Fluxo de CSV/XLSX com SHA-256, bloqueio de reimportação silenciosa (409), reprocessamento versionado, escolha de aba, sugestão/edição de mapeamento e templates reutilizáveis por fonte.
+- A prévia do servidor é obrigatória; somente a confirmação explícita coloca o lote na fila PostgreSQL. O mapeamento escolhe medições, cargas/pesagens ou análises de qualidade; o worker publica registros aceitos nas tabelas operacionais e fatos estrela correspondentes.
+- Cargas exigem referência externa única, horário, peso bruto e tara: pesos iguais em cargas distintas são aceitos quando suas referências diferem. Análises relacionam amostra, indicador, método opcional e carga opcional.
+- Cada linha bruta é preservada e classificada em exatamente uma fila: `Aceitos`, `Rejeitados`, `Suspeitos` ou `Pendentes`. Suspeitos e pendentes não são apagados.
+- As validações cobrem estrutura, tipagem, unidades/escala, faixas homologadas, tempo, duplicidade, integridade referencial, coerência, rastreabilidade, sincronização de contingência e conciliação entre fontes. Não são inventados limites técnicos: faixas só são aplicadas quando houver regra homologada com limites explícitos.
+- `UMIDADE_LAB` em fração decimal é normalizada uma vez para percentual; valor e unidade originais permanecem imutáveis.
+- Portal e Dashboard leem as métricas separadas do fato analítico de qualidade de importação: completude, atraso da fonte, duplicidade, integridade referencial, reconhecimento de unidades, conciliação entre fontes e cobertura por indicador. Não há nota agregada.
+- O CSV de auditoria contém somente linhas rejeitadas/suspeitas e seus motivos técnicos.
 
 ### 2.3 Integração com Power BI
 - Incorporação do dashboard por link público de publicação na web (`app.powerbi.com/view?r=...`). A aplicação também aceita URLs `reportEmbed` legadas com `reportId` e `ctid` válidos.
@@ -87,7 +83,7 @@ Abra seu navegador em `http://localhost:5173`.
 
 `APP_ENV` aceita somente `DEV`, `QAS` ou `PRD` e seleciona exclusivamente a variável `DATABASE_URL_<APP_ENV>`. Não há fallback entre ambientes. Conexões PRD também exigem `ALLOW_PRD_DATABASE=true` no ambiente de produção. Use credenciais e bancos separados para DEV/QAS/PRD; não use os valores de exemplo fora de uma instalação local.
 
-Para MinIO, configure `OBJECT_STORAGE_ENDPOINT`, `OBJECT_STORAGE_BUCKET`, `OBJECT_STORAGE_ACCESS_KEY` e `OBJECT_STORAGE_SECRET_KEY`. Para AWS S3, deixe o endpoint vazio e use a cadeia de credenciais da AWS. Configure versionamento e política de retenção no bucket; cada arquivo gravado recebe chave aleatória e SHA-256, e o banco mantém a referência/hash de lotes de importação. Nunca reutilize chaves para substituir objetos existentes.
+Para MinIO, configure `OBJECT_STORAGE_ENDPOINT`, `OBJECT_STORAGE_BUCKET`, `OBJECT_STORAGE_ACCESS_KEY` e `OBJECT_STORAGE_SECRET_KEY`. Para AWS S3, deixe o endpoint vazio e use a cadeia de credenciais da AWS. Configure versionamento e política de retenção no bucket; cada arquivo gravado recebe chave aleatória e SHA-256, e o banco mantém a referência/hash de lotes de importação. Nunca reutilize chaves para substituir objetos existentes. O worker assíncrono roda junto com a API e usa leases no PostgreSQL para recuperar jobs interrompidos.
 
 Use uma credencial PostgreSQL dedicada à aplicação, sem `SUPERUSER` nem `BYPASSRLS`; mesmo com `FORCE ROW LEVEL SECURITY`, superusuários e roles com `BYPASSRLS` ignoram as políticas.
 
@@ -150,13 +146,21 @@ npm run build
 | `GET / PUT / DELETE` | `/api/indicador/:id` | Consulta, edição e exclusão de indicador |
 | `GET / POST` | `/api/cadastros/:tipo` | CRUD de safras, unidades, equipamentos, etc. |
 | `GET / PUT / DELETE` | `/api/cadastros/:tipo/:id` | Operações por ID no escopo da organização |
-| `POST` | `/api/imports` | Arquiva CSV/XLSX original no bucket e registra lote/hash; limite de 9 MB |
+| `GET` | `/api/imports/options` | Lista usinas, safras e fontes dentro do escopo autorizado |
+| `POST` | `/api/imports` | Arquiva CSV/XLSX e registra lote/hash e tipo (`measurements`, `loads` ou `quality_analyses`); retorna 409 se o mesmo arquivo/tipo já existir; limite de 9 MB |
+| `POST` | `/api/imports/:id/preview` | Seleciona aba e retorna cabeçalho, amostra e sugestão de mapeamento |
+| `POST` | `/api/imports/:id/confirm` | Persiste template opcional e confirma processamento assíncrono |
+| `GET` | `/api/imports/:id` | Consulta estado, filas e métricas separadas do lote |
+| `GET` | `/api/imports/:id/rows?queue=Pendentes` | Consulta linhas preservadas de uma fila com paginação limitada |
+| `GET` | `/api/imports/quality` | Lista qualidade de importações do fato analítico compartilhado |
+| `GET` | `/api/imports/:id/report.csv` | Baixa erros/suspeitos com motivos técnicos |
 | `GET` | `/api/imports/:id/original` | Recupera o original apenas com permissão de exportação e escopo autorizado |
 | `GET` | `/api/exports/:tipo` | Exporta registros do módulo no escopo permitido |
 | `POST` | `/api/admin/users` | Cria usuário operacional/tático/estratégico com escopo inicial |
 | `PATCH` | `/api/admin/users/:id/access` | Altera departamento, nível, papel, unidades e frentes do usuário |
 | `POST` | `/api/releases/measurements/:id` | Registra aprovação tática/estratégica de medição |
 | `POST` | `/api/releases/quality-analyses/:id` | Registra aprovação tática/estratégica de análise |
+| `POST` | `/api/rules` | Cria regra técnica em rascunho com limites explícitos |
 | `POST` | `/api/rules/:id/homologate` | Homologa regra técnica com justificativa e auditoria |
 | `POST` | `/api/periods/:harvestId/close` | Fecha uma versão imutável do período/safra |
 

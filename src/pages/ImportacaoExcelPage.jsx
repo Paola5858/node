@@ -1,523 +1,469 @@
-import React, { useState, useMemo, useRef } from 'react'
-import { preservarArquivoOriginal } from '../services/api'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
+import {
+  baixarRelatorioImportacao,
+  consultarLinhasImportacao,
+  confirmarImportacao,
+  consultarImportacao,
+  criarLoteImportacao,
+  gerarPreviaImportacao,
+  listarQualidadeImportacao,
+  obterOpcoesImportacao,
+} from '../services/api'
 
-// Estruturas de referência do setor sucroenergético
-const MODELOS_ABAS = {
-  Fato_Medicoes: {
-    nome: 'Fato_Medicoes',
-    descricao: 'Medições industriais e físico-químicas da matéria-prima e processo',
-    colunasObrigatorias: ['ID_MEDICAO', 'DATA_HORA', 'SAFRA', 'UNIDADE', 'EQUIPAMENTO', 'INDICADOR', 'VALOR_ORIGINAL', 'UNIDADE_MEDIDA'],
-    colunasOpcionais: ['STATUS_OPERACIONAL', 'OBSERVACOES_ORIGEM'],
-  },
-  Dim_Indicador: {
-    nome: 'Dim_Indicador',
-    descricao: 'Dicionário de indicadores de qualidade e processo (Brix, Pol, ATR, etc.)',
-    colunasObrigatorias: ['COD_INDICADOR', 'NOME_INDICADOR', 'UNIDADE_PADRAO', 'TIPO_AGREGACAO', 'GRUPO_PROCESSO'],
-    colunasOpcionais: ['LIMITE_MIN_ESPERADO', 'LIMITE_MAX_ESPERADO', 'STATUS_HOMOLOGACAO'],
-  },
-  Dim_Calendario: {
-    nome: 'Dim_Calendario',
-    descricao: 'Calendário industrial de safra, semanas operacionais e dias de moagem',
-    colunasObrigatorias: ['DATA', 'SAFRA', 'SEMANA_SAFRA', 'DIA_MOAGEM_ATIVO', 'STATUS_FABRICA'],
-    colunasOpcionais: ['MOTIVO_PARADA'],
-  },
-  Auditoria_Dados: {
-    nome: 'Auditoria_Dados',
-    descricao: 'Histórico de ingestão, fontes de origem e logs de transformação',
-    colunasObrigatorias: ['ID_LOTE', 'ARQUIVO_ORIGEM', 'DATA_INGESTAO', 'RESPONSAVEL', 'TOTAL_REGISTROS'],
-    colunasOpcionais: ['HASH_ARQUIVO', 'TRANSFORMACOES_APLICADAS'],
-  },
-  Pendencias_Validacao: {
-    nome: 'Pendencias_Validacao',
-    descricao: 'Registros retidos para revisão técnica por inconsistência ou duplicidade',
-    colunasObrigatorias: ['ID_PENDENCIA', 'REGISTRO_REF', 'MOTIVO_RETENCAO', 'TIPO_DADO', 'GRAVIDADE'],
-    colunasOpcionais: ['VALOR_ANALISADO', 'DATA_IDENTIFICACAO'],
-  },
-  Resumo_Qualidade: {
-    nome: 'Resumo_Qualidade',
-    descricao: 'Relatório executivo de conformidade da base industrial',
-    colunasObrigatorias: ['PERIODO', 'TAXA_CONFORMIDADE_PCT', 'TOTAL_ACEITOS', 'TOTAL_PENDENTES'],
-    colunasOpcionais: ['INDICADORES_FORA_PADRAO'],
-  },
+const TIPOS_ENTIDADE = [
+  ['measurements', 'Medições industriais'],
+  ['loads', 'Cargas / pesagens'],
+  ['quality_analyses', 'Amostras / análises de qualidade'],
+]
+
+const CAMPOS_POR_ENTIDADE = {
+  measurements: [
+    ['measured_at', 'Data/hora da medição', true],
+    ['equipment', 'Equipamento', true],
+    ['indicator', 'Indicador', true],
+    ['value', 'Valor original', true],
+    ['unit_of_measure', 'Unidade original', true],
+    ['event_id', 'Identificador do evento', false],
+    ['sync_status', 'Status de sincronização', false],
+  ],
+  loads: [
+    ['external_reference', 'Identificador único da carga', true],
+    ['weighed_at', 'Data/hora da pesagem', true],
+    ['gross_weight', 'Peso bruto', true],
+    ['tare_weight', 'Tara', true],
+    ['supplier', 'Fornecedor', false],
+    ['farm', 'Fazenda', false],
+    ['plot', 'Talhão', false],
+    ['front', 'Frente', false],
+    ['sync_status', 'Status de sincronização', false],
+  ],
+  quality_analyses: [
+    ['sample_code', 'Código da amostra', true],
+    ['indicator', 'Indicador', true],
+    ['measured_at', 'Data/hora da coleta', true],
+    ['value', 'Resultado original', true],
+    ['unit_of_measure', 'Unidade original', true],
+    ['load_reference', 'Identificador da carga', false],
+    ['method', 'Método analítico', false],
+    ['sync_status', 'Status de sincronização', false],
+  ],
 }
 
-// Dados de amostra representativos de operação sucroenergética real para validação técnica
-const DADOS_EXEMPLO_FATO = `ID_MEDICAO;DATA_HORA;SAFRA;UNIDADE;EQUIPAMENTO;INDICADOR;VALOR_ORIGINAL;UNIDADE_MEDIDA;STATUS_OPERACIONAL
-1001;2026-10-15 08:00;safra 2026/27;Moenda 1;Extrator A;BRIX_CALDO_PRIM;19.45;°Bx;Operação normal
-1002;2026-10-15 08:00;safra 2026/27;Moenda 1;Extrator A;POL_CALDO_PRIM;16.32;%;Operação normal
-1003;2026-10-15 08:30;safra 2026/27;Laboratório Central;Sacarímetro 2;PUREZA_CALDO;83.91;%;Operação normal
-1004;2026-10-15 09:00;safra 2026/27;Moenda 1;Sensor Bagaco;POL_BAGACO;1.85;%;Operação normal
-1005;2026-10-15 09:00;safra 2026/27;Laboratório Central;Balança Umidade;UMIDADE_LAB;0.089;fração decimal;Atenção: escala fracionária
-1006;2026-10-15 09:30;safra 2026/27;Difusor 1;Calha de Entrada;FIBRA_CANA;12.80;%;Operação normal
-1007;2026-10-15 10:00;safra 2026/27;Laboratório Central;Auto-Titro;ARC_CANA;0.78;%;Operação normal
-1008;2026-10-15 10:30;safra 2026/27;Balança Rodoviária;Pista 1;TC;48.50;a homologar;Pendente validação técnica de unidade
-1009;2026-10-15 11:00;safra 2026/27;Destilaria;Dorna 4;VIABILIDADE_LEVEDURA;86.40;%;Operação normal
-1010;2026-10-15 11:30;safra 2026/27;Destilaria;Dorna 4;ACIDO_LATICO;1.20;g/L;Sob controle
-1011;2026-10-15 12:00;safra 2026/27;Moenda 1;Extrator A;BRIX_CALDO_PRIM;19.50;°Bx;Operação normal
-1012;2026-10-15 12:00;safra 2026/27;Moenda 1;Extrator A;BRIX_CALDO_PRIM;19.50;°Bx;Possível duplicidade de leitura`
-
-function parseCsv(texto) {
-  const linhas = texto.trim().split(/\r?\n/)
-  if (linhas.length < 2) return { colunas: [], linhas: [] }
-
-  // Detecção de delimitador: ponto-e-vírgula ou vírgula
-  const primeiraLinha = linhas[0]
-  const delimitador = primeiraLinha.includes(';') ? ';' : ','
-
-  const colunas = primeiraLinha.split(delimitador).map((c) => c.trim().replace(/^["']|["']$/g, ''))
-  const dados = []
-
-  for (let i = 1; i < linhas.length; i++) {
-    const linha = linhas[i].trim()
-    if (!linha) continue
-    const partes = linha.split(delimitador).map((p) => p.trim().replace(/^["']|["']$/g, ''))
-    const obj = {}
-    colunas.forEach((col, idx) => {
-      obj[col] = partes[idx] !== undefined ? partes[idx] : ''
-    })
-    obj.__linha = i + 1
-    dados.push(obj)
-  }
-
-  return { colunas, linhas: dados }
+const STATUS = {
+  uploaded: 'arquivo recebido',
+  previewed: 'prévia pronta',
+  queued: 'na fila de processamento',
+  processing: 'processando',
+  processed: 'processado',
+  failed: 'falha no processamento',
+  quarantined: 'em quarentena',
+  received: 'recebido',
 }
 
-function validarRegistrosIndustriais(registros, abaAtiva) {
-  const aceitos = []
-  const pendencias = []
-  const duplicidades = []
-  const transformacoes = []
-
-  const chavesVistas = new Set()
-
-  registros.forEach((reg) => {
-    const erros = []
-    const avisos = []
-
-    // 1. Verificação de duplicidades
-    const chaveDuplicidade = `${reg.DATA_HORA || ''}_${reg.EQUIPAMENTO || ''}_${reg.INDICADOR || ''}`
-    if (chaveDuplicidade !== '__' && chavesVistas.has(chaveDuplicidade)) {
-      duplicidades.push({
-        linha: reg.__linha,
-        registro: reg,
-        motivo: `Duplicidade detectada para o mesmo momento e equipamento (${reg.INDICADOR || 'N/A'})`,
-      })
-      avisos.push('Registro duplicado com medição anterior idêntica')
-    } else if (chaveDuplicidade !== '__') {
-      chavesVistas.add(chaveDuplicidade)
-    }
-
-    // 2. Regra de Negócio: UMIDADE_LAB
-    if (reg.INDICADOR === 'UMIDADE_LAB') {
-      const num = parseFloat(String(reg.VALOR_ORIGINAL).replace(',', '.'))
-      if (!isNaN(num)) {
-        if (num > 0 && num <= 0.30) {
-          transformacoes.push({
-            linha: reg.__linha,
-            indicador: 'UMIDADE_LAB',
-            original: reg.VALOR_ORIGINAL,
-            transformado: `${(num * 100).toFixed(2)}%`,
-            regra: 'Fração decimal detectada (<= 0.30). Interpretado como % sem duplicar multiplicação na origem.',
-          })
-        } else if (num > 30 && num <= 100) {
-          // Já em percentual
-        } else {
-          erros.push(`Valor de UMIDADE_LAB fora da faixa plausível: ${reg.VALOR_ORIGINAL}`)
-        }
-      }
-    }
-
-    // 3. Regra de Negócio: Indicador TC
-    if (reg.INDICADOR === 'TC') {
-      avisos.push('Indicador TC: Definição técnica e unidade sob validação. Média ponderada não aplicada automaticamente.')
-    }
-
-    // 4. Regra de Negócio: Coerência Brix vs Pol
-    if (reg.INDICADOR === 'POL_CALDO_PRIM') {
-      const pol = parseFloat(String(reg.VALOR_ORIGINAL).replace(',', '.'))
-      if (!isNaN(pol) && pol > 25) {
-        erros.push(`Pol do caldo primário anormalmente alto (> 25%): ${reg.VALOR_ORIGINAL}`)
-      }
-    }
-
-    // 5. Verificação de campos obrigatórios
-    const confAba = MODELOS_ABAS[abaAtiva]
-    if (confAba) {
-      confAba.colunasObrigatorias.forEach((col) => {
-        if (reg[col] === undefined || reg[col] === '') {
-          erros.push(`Campo obrigatório ausente: ${col}`)
-        }
-      })
-    }
-
-    if (erros.length > 0) {
-      pendencias.push({
-        linha: reg.__linha,
-        registro: reg,
-        erros,
-        avisos,
-      })
-    } else {
-      aceitos.push({
-        ...reg,
-        __avisos: avisos,
-      })
-    }
-  })
-
-  return {
-    aceitos,
-    pendencias,
-    duplicidades,
-    transformacoes,
-    taxaConformidade: registros.length > 0 ? ((aceitos.length / registros.length) * 100).toFixed(1) : 0,
-  }
+function percentage(value) {
+  return value === null || value === undefined ? '—' : `${Number(value).toFixed(2)}%`
 }
 
 function ImportacaoExcelPage({ sessao }) {
-  const [abaSelecionada, setAbaSelecionada] = useState('Fato_Medicoes')
-  const [nomeArquivo, setNomeArquivo] = useState('')
-  const [unidadeSelecionada, setUnidadeSelecionada] = useState(
+  const [options, setOptions] = useState({ units: [], harvests: [], sources: [] })
+  const [qualityHistory, setQualityHistory] = useState([])
+  const [selectedQueue, setSelectedQueue] = useState('')
+  const [queueRows, setQueueRows] = useState([])
+  const [unitId, setUnitId] = useState(
     sessao?.unitIds?.length === 1 && sessao.unitIds[0] !== '*' ? String(sessao.unitIds[0]) : '',
   )
-  const [conteudoBruto, setConteudoBruto] = useState('')
-  const [statusImportacao, setStatusImportacao] = useState('')
-  const [resultadoAuditoria, setResultadoAuditoria] = useState(null)
-  const [paginaTabela, setPaginaTabela] = useState(1)
-  const [filtroTexto, setFiltroTexto] = useState('')
-  const [filtroStatus, setFiltroStatus] = useState('todos')
-  const fileInputRef = useRef(null)
+  const [entityType, setEntityType] = useState('measurements')
+  const [harvestId, setHarvestId] = useState('')
+  const [sourceName, setSourceName] = useState('portal-file-upload')
+  const [customSource, setCustomSource] = useState('')
+  const [file, setFile] = useState(null)
+  const [batchId, setBatchId] = useState(null)
+  const [batchStatus, setBatchStatus] = useState('')
+  const [preview, setPreview] = useState(null)
+  const [mapping, setMapping] = useState({})
+  const [templateName, setTemplateName] = useState('')
+  const [duplicate, setDuplicate] = useState(null)
+  const [errorMessage, setErrorMessage] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [notice, setNotice] = useState('')
+  const fileInput = useRef(null)
 
-  function carregarAmostraOperacional() {
-    setNomeArquivo('Amostra_Fato_Medicoes_Usina_2026.csv')
-    setConteudoBruto(DADOS_EXEMPLO_FATO)
-    analisarDados(DADOS_EXEMPLO_FATO, 'Amostra_Fato_Medicoes_Usina_2026.csv')
-  }
+  useEffect(() => {
+    let active = true
+    Promise.all([obterOpcoesImportacao(), listarQualidadeImportacao()])
+      .then(([result, history]) => {
+        if (!active) return
+        setOptions(result)
+        setQualityHistory(history)
+        if (result.units.length === 1) setUnitId((current) => current || String(result.units[0].id))
+        if (result.sources.length) setSourceName((current) => current === 'portal-file-upload' ? result.sources[0].name : current)
+      })
+      .catch((cause) => { if (active) setErrorMessage(cause.message) })
+    return () => { active = false }
+  }, [])
 
-  function lidarComArquivo(event) {
-    const arquivo = event.target.files?.[0]
-    if (!arquivo) return
-    setNomeArquivo(arquivo.name)
-    const leitor = new FileReader()
-    leitor.onload = (e) => {
-      const texto = e.target.result
-      setConteudoBruto(texto)
-      analisarDados(texto, arquivo.name)
-      setStatusImportacao('Arquivando o original...')
-      const options = unidadeSelecionada ? { unitId: Number(unidadeSelecionada) } : {}
-      preservarArquivoOriginal(arquivo, options)
-        .then((lote) => setStatusImportacao(`Original arquivado no lote ${lote.id} (SHA-256: ${lote.sha256}).`))
-        .catch((cause) => setStatusImportacao(`Falha ao arquivar o original: ${cause.message}`))
+  useEffect(() => {
+    if (!batchId || !['queued', 'processing'].includes(batchStatus)) return undefined
+    let active = true
+    let timer
+    const poll = async () => {
+      try {
+        const status = await consultarImportacao(batchId)
+        if (!active) return
+        setBatchStatus(status.status)
+        setNotice(status.failure_message || '')
+        if (status.status === 'processed') {
+          setPreview((current) => ({ ...current, result: status }))
+          const history = await listarQualidadeImportacao()
+          if (active) setQualityHistory(history)
+        }
+        else if (['queued', 'processing'].includes(status.status)) timer = setTimeout(poll, 1800)
+      } catch (cause) {
+        if (active) {
+          setErrorMessage(cause.message)
+          timer = setTimeout(poll, 4000)
+        }
+      }
     }
-    leitor.onerror = () => {
-      alert('Não foi possível ler o arquivo selecionado.')
-    }
-    leitor.readAsText(arquivo, 'UTF-8')
+    timer = setTimeout(poll, 900)
+    return () => { active = false; clearTimeout(timer) }
+  }, [batchId, batchStatus])
+
+  const harvestOptions = useMemo(
+    () => options.harvests.filter((harvest) => String(harvest.unitId) === String(unitId)),
+    [options.harvests, unitId],
+  )
+  const canUpload = Boolean(file && unitId && harvestId && (sourceName !== '__new' || customSource.trim()))
+
+  function chooseFile(event) {
+    const selected = event.target.files?.[0] || null
+    setFile(selected)
+    setBatchId(null)
+    setBatchStatus('')
+    setPreview(null)
+    setMapping({})
+    setDuplicate(null)
+    setErrorMessage('')
+    setNotice('')
     event.target.value = ''
   }
 
-  function analisarDados(texto, nome) {
-    const parsed = parseCsv(texto)
-    const auditoria = validarRegistrosIndustriais(parsed.linhas, abaSelecionada)
-
-    setResultadoAuditoria({
-      arquivo: nome,
-      aba: abaSelecionada,
-      dataIngestao: new Date().toLocaleString('pt-BR'),
-      responsavel: sessao?.nome || sessao?.email || 'Operador Industrial',
-      totalLido: parsed.linhas.length,
-      colunas: parsed.colunas,
-      dadosBrutos: parsed.linhas,
-      ...auditoria,
-    })
-    setPaginaTabela(1)
+  async function loadPreview(id, sheetName = '') {
+    setBusy(true)
+    setErrorMessage('')
+    try {
+      const result = await gerarPreviaImportacao(id, sheetName)
+      setPreview(result)
+      setMapping(result.suggestedMapping)
+      setBatchStatus('previewed')
+      setNotice(`${result.totalRows} linha(s) encontradas. Revise as colunas antes de confirmar.`)
+    } catch (cause) {
+      setErrorMessage(cause.message)
+    } finally {
+      setBusy(false)
+    }
   }
 
-  const itensExibicao = useMemo(() => {
-    if (!resultadoAuditoria?.dadosBrutos) return []
-    let lista = resultadoAuditoria.dadosBrutos
-
-    if (filtroStatus === 'aceitos') {
-      const idsAceitos = new Set(resultadoAuditoria.aceitos.map((a) => a.__linha))
-      lista = lista.filter((item) => idsAceitos.has(item.__linha))
-    } else if (filtroStatus === 'pendentes') {
-      const idsPendentes = new Set(resultadoAuditoria.pendencias.map((p) => p.linha))
-      lista = lista.filter((item) => idsPendentes.has(item.__linha))
-    } else if (filtroStatus === 'duplicados') {
-      const idsDuplicados = new Set(resultadoAuditoria.duplicidades.map((d) => d.linha))
-      lista = lista.filter((item) => idsDuplicados.has(item.__linha))
+  async function submitFile(reprocessOf = undefined) {
+    if (!canUpload) return
+    setBusy(true)
+    setErrorMessage('')
+    setDuplicate(null)
+    setNotice('Enviando e preservando o arquivo original...')
+    try {
+      const created = await criarLoteImportacao(file, {
+        unitId: Number(unitId),
+        harvestId: Number(harvestId),
+        entityType,
+        sourceName: sourceName === '__new' ? customSource.trim() : sourceName,
+        ...(reprocessOf === undefined ? {} : { reprocessOf }),
+      })
+      setBatchId(created.id)
+      setBatchStatus(created.status)
+      setNotice(`Original preservado. Lote ${created.id}, versão ${created.version}.`)
+      await loadPreview(created.id)
+    } catch (cause) {
+      if (cause.status === 409 && cause.data?.canReprocess) {
+        setDuplicate(cause.data)
+        setNotice('')
+      } else {
+        setErrorMessage(cause.message)
+        setNotice('')
+      }
+    } finally {
+      setBusy(false)
     }
+  }
 
-    if (filtroTexto.trim()) {
-      const t = filtroTexto.toLowerCase()
-      lista = lista.filter((item) =>
-        Object.values(item).some((v) => String(v).toLowerCase().includes(t))
-      )
+  async function confirmBatch() {
+    if (!batchId || !preview || !mapping) return
+    setBusy(true)
+    setErrorMessage('')
+    try {
+      const result = await confirmarImportacao(batchId, { mapping, templateName })
+      setBatchStatus(result.status)
+      setNotice(result.message)
+    } catch (cause) {
+      setErrorMessage(cause.message)
+    } finally {
+      setBusy(false)
     }
+  }
 
-    return lista
-  }, [resultadoAuditoria, filtroStatus, filtroTexto])
+  async function downloadReport() {
+    try {
+      const blob = await baixarRelatorioImportacao(batchId)
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `importacao-${batchId}-erros.csv`
+      link.click()
+      setTimeout(() => URL.revokeObjectURL(url), 1000)
+    } catch (cause) {
+      setErrorMessage(cause.message)
+    }
+  }
 
-  const itensPaginados = useMemo(() => {
-    const porPagina = 8
-    const inicio = (paginaTabela - 1) * porPagina
-    return itensExibicao.slice(inicio, inicio + porPagina)
-  }, [itensExibicao, paginaTabela])
+  async function openQueue(queue) {
+    setSelectedQueue(queue)
+    setErrorMessage('')
+    try {
+      const result = await consultarLinhasImportacao(batchId, queue)
+      setQueueRows(result.rows)
+    } catch (cause) {
+      setErrorMessage(cause.message)
+    }
+  }
 
-  const totalPaginas = Math.ceil(itensExibicao.length / 8) || 1
+  function selectTemplate(value) {
+    const selected = preview?.templates?.find((template) => String(template.id) === value)
+    if (!selected) return
+    setMapping(selected.mapping)
+    if (selected.sheetName && selected.sheetName !== preview.selectedSheet) {
+      loadPreview(batchId, selected.sheetName)
+        .then(() => setMapping(selected.mapping))
+    }
+  }
+
+  const result = preview?.result
+  const metrics = result?.quality_metrics
+  const campos = CAMPOS_POR_ENTIDADE[entityType]
+  const mappingReady = campos.filter(([, , required]) => required)
+    .every(([field]) => mapping[field] && preview?.headers?.includes(mapping[field]))
 
   return (
     <section className="importacao-excel-page">
       <div className="page-intro">
         <div>
-          <span className="eyebrow">
-            <span className="eyebrow-line" /> engenharia de dados / excel & csv
-          </span>
-          <h1>
-            importação e <em>qualidade industrial.</em>
-          </h1>
-          <p>
-            Validação rigorosa de planilhas operacionais com auditoria de colunas,
-            detecção de inconsistências e rastreabilidade total para o setor sucroenergético.
-          </p>
+          <span className="eyebrow"><span className="eyebrow-line" /> ingestão controlada / qualidade de dados</span>
+          <h1>importação e <em>qualidade industrial.</em></h1>
+          <p>Arquivamento imutável, prévia obrigatória, mapeamento reutilizável e validação no servidor antes da publicação.</p>
         </div>
-        <div className="step-badge">
-          <strong>ETL</strong>
-          <span>validação<br />de dados</span>
-        </div>
+        <div className="step-badge"><strong>ETL</strong><span>bruto → tratado<br />com rastreabilidade</span></div>
       </div>
 
-      {/* Seletor de Modelo de Aba Industrial */}
-      <div className="glass-card aba-selector-card">
-        <div className="card-heading">
-          <div>
-            <span className="mini-label">estrutura esperada</span>
-            <h2>selecione a aba ou modelo industrial</h2>
-          </div>
-          <button
-            type="button"
-            className="button-ghost"
-            onClick={carregarAmostraOperacional}
-            title="Carregar conjunto pré-formatado de medições industriais"
-          >
-            carregar amostra de usina ↗
-          </button>
-        </div>
-
-        <div className="abas-grid">
-          {Object.entries(MODELOS_ABAS).map(([chave, conf]) => (
-            <button
-              key={chave}
-              type="button"
-              className={`aba-pill ${abaSelecionada === chave ? 'ativa' : ''}`}
-              onClick={() => {
-                setAbaSelecionada(chave)
-                if (conteudoBruto) {
-                  analisarDados(conteudoBruto, nomeArquivo)
-                }
-              }}
-            >
-              <strong>{conf.nome}</strong>
-              <small>{conf.descricao}</small>
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Zona de Drop e Upload */}
       <div className="glass-card import-dropzone-card">
-        {Array.isArray(sessao?.unitIds) && sessao.unitIds.length > 1 && !sessao.unitIds.includes('*') && (
+        <div className="card-heading">
+          <div><span className="mini-label">1 · contexto do lote</span><h2>origem e escopo</h2></div>
+        </div>
+        <div className="abas-grid">
           <label>
-            Usina da importação
-            <select value={unidadeSelecionada} onChange={(event) => setUnidadeSelecionada(event.target.value)} required>
-              <option value="">Selecione uma usina</option>
-              {sessao.unitIds.map((id) => <option key={id} value={id}>Usina #{id}</option>)}
+            Tipo de dado
+            <select value={entityType} onChange={(event) => {
+              setEntityType(event.target.value)
+              setBatchId(null)
+              setBatchStatus('')
+              setPreview(null)
+              setMapping({})
+              setDuplicate(null)
+            }}>
+              {TIPOS_ENTIDADE.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
             </select>
           </label>
-        )}
-        <input
-          type="file"
-          ref={fileInputRef}
-          accept=".csv"
-          style={{ display: 'none' }}
-          onChange={lidarComArquivo}
-        />
-        <div className="upload-box" onClick={() => fileInputRef.current?.click()}>
+          <label>
+            Usina
+            <select value={unitId} onChange={(event) => { setUnitId(event.target.value); setHarvestId('') }} required>
+              <option value="">Selecione uma usina</option>
+              {options.units.map((unit) => <option key={unit.id} value={unit.id}>{unit.name}</option>)}
+            </select>
+          </label>
+          <label>
+            Safra
+            <select value={harvestId} onChange={(event) => setHarvestId(event.target.value)} required disabled={!unitId}>
+              <option value="">Selecione uma safra</option>
+              {harvestOptions.map((harvest) => <option key={harvest.id} value={harvest.id}>{harvest.name}</option>)}
+            </select>
+          </label>
+          <label>
+            Fonte
+            <select value={sourceName} onChange={(event) => setSourceName(event.target.value)}>
+              {!options.sources.some((source) => source.name === 'portal-file-upload') && <option value="portal-file-upload">Portal · arquivo manual</option>}
+              {options.sources.map((source) => <option key={source.id} value={source.name}>{source.name}</option>)}
+              <option value="__new">Cadastrar nova fonte...</option>
+            </select>
+          </label>
+          {sourceName === '__new' && (
+            <label>
+              Nome da nova fonte
+              <input value={customSource} onChange={(event) => setCustomSource(event.target.value)} maxLength={120} />
+            </label>
+          )}
+        </div>
+
+        <input ref={fileInput} type="file" accept=".csv,.xlsx" hidden onChange={chooseFile} />
+        <div className="upload-box">
           <div className="upload-box-icon" aria-hidden="true">📊</div>
           <div>
-            <h3>{nomeArquivo ? `Arquivo selecionado: ${nomeArquivo}` : 'Selecione uma planilha CSV exportada'}</h3>
-            <p>Compatível com padrões SCADA, PIMS, LIMS e planilhas de apontamento diário (separador ';' ou ',')</p>
-            {statusImportacao && <p aria-live="polite">{statusImportacao}</p>}
+            <h3>{file ? file.name : 'Selecione um arquivo CSV ou Excel (.xlsx)'}</h3>
+            <p>Máximo de 9 MB. O original é preservado sem alterações; nada é processado antes da confirmação explícita.</p>
+            {batchId && <p>Lote #{batchId} · {STATUS[batchStatus] || batchStatus}</p>}
+            {notice && <p aria-live="polite">{notice}</p>}
+            {errorMessage && <p role="alert" style={{ color: 'var(--danger)' }}>{errorMessage}</p>}
           </div>
-          <button type="button" className="button-primary">
-            escolher arquivo <span>↑</span>
+          <button type="button" className="button-ghost" onClick={() => fileInput.current?.click()}>escolher arquivo</button>
+        </div>
+        <div className="card-heading" style={{ marginTop: 16 }}>
+          <span>{file ? `Selecionado: ${file.name}` : 'O lote registra usuário, organização, usina, safra, fonte, horário e SHA-256.'}</span>
+          <button type="button" className="button-primary" disabled={!canUpload || busy} onClick={() => submitFile()}>
+            {busy ? 'aguarde...' : 'enviar e gerar prévia'}
           </button>
         </div>
+        {duplicate && (
+          <div className="regra-item regra-alerta" role="alert">
+            <div>
+              <strong>Arquivo já importado no lote #{duplicate.existingBatchId} (versão {duplicate.version ?? 'legada'}).</strong>
+              <p>O mesmo SHA-256 não será reimportado silenciosamente. Confirme abaixo para criar uma nova versão do lote.</p>
+              <button type="button" className="button-primary" disabled={busy} onClick={() => submitFile(duplicate.existingBatchId)}>
+                reprocessar como nova versão
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* Relatório de Auditoria e Qualidade */}
-      {resultadoAuditoria && (
-        <div className="auditoria-summary-grid">
-          <div className="metric-card">
-            <span className="metric-label">registros lidos</span>
-            <strong>{resultadoAuditoria.totalLido}</strong>
-            <span className="metric-caption">arquivo: {resultadoAuditoria.arquivo}</span>
-          </div>
-
-          <div className="metric-card accent">
-            <span className="metric-label">taxa de conformidade</span>
-            <strong>{resultadoAuditoria.taxaConformidade}%</strong>
-            <span className="metric-caption">{resultadoAuditoria.aceitos.length} registros válidos</span>
-          </div>
-
-          <div className="metric-card">
-            <span className="metric-label">pendências / erros</span>
-            <strong style={{ color: resultadoAuditoria.pendencias.length > 0 ? 'var(--danger)' : 'var(--success)' }}>
-              {resultadoAuditoria.pendencias.length}
-            </strong>
-            <span className="metric-caption">revisão técnica necessária</span>
-          </div>
-
-          <div className="metric-card">
-            <span className="metric-label">duplicidades</span>
-            <strong style={{ color: resultadoAuditoria.duplicidades.length > 0 ? 'var(--amber)' : 'inherit' }}>
-              {resultadoAuditoria.duplicidades.length}
-            </strong>
-            <span className="metric-caption">leituras concorrentes</span>
-          </div>
-        </div>
-      )}
-
-      {/* Alertas Especiais de Negócio Sucroenergético */}
-      {resultadoAuditoria && (resultadoAuditoria.transformacoes.length > 0 || resultadoAuditoria.duplicidades.length > 0) && (
-        <div className="glass-card regras-negocio-card">
-          <div className="card-heading">
-            <div>
-              <span className="mini-label">regras industriais aplicadas</span>
-              <h2>rastreabilidade & ressalvas técnicas</h2>
-            </div>
-          </div>
-
-          <div className="regras-lista">
-            {resultadoAuditoria.transformacoes.map((t, idx) => (
-              <div key={idx} className="regra-item regra-info">
-                <span className="regra-badge">escala</span>
-                <div>
-                  <strong>{t.indicador} (Linha {t.linha})</strong>
-                  <p>{t.regra} | Valor original: <code>{t.original}</code> → Analítico: <code>{t.transformado}</code></p>
-                </div>
-              </div>
-            ))}
-
-            {resultadoAuditoria.dadosBrutos.some((r) => r.INDICADOR === 'TC') && (
-              <div className="regra-item regra-alerta">
-                <span className="regra-badge">tc pendente</span>
-                <div>
-                  <strong>Indicador TC (Toneladas de Cana / Tempo de Ciclo)</strong>
-                  <p>
-                    Conforme especificação da usina, a unidade e o método de ponderação do indicador TC
-                    estão sob validação técnica. Nenhuma média ponderada foi inferida arbitrariamente.
-                  </p>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Tabela de Pré-visualização com Filtros */}
-      {resultadoAuditoria && (
+      {preview && (
         <div className="glass-card tabela-previa-card">
-          <div className="tabela-toolbar">
-            <div>
-              <span className="mini-label">auditoria de dados</span>
-              <h2>pré-visualização analítica</h2>
-            </div>
-
-            <div className="tabela-filtros">
-              <input
-                type="text"
-                placeholder="Filtrar por indicador, equipamento..."
-                value={filtroTexto}
-                onChange={(e) => setFiltroTexto(e.target.value)}
-                className="tabela-search"
-              />
-
-              <select
-                value={filtroStatus}
-                onChange={(e) => { setFiltroStatus(e.target.value); setPaginaTabela(1); }}
-                className="tabela-select"
-              >
-                <option value="todos">Todos os registros</option>
-                <option value="aceitos">Apenas aceitos</option>
-                <option value="pendentes">Com pendência</option>
-                <option value="duplicados">Duplicidades</option>
-              </select>
-            </div>
+          <div className="card-heading">
+            <div><span className="mini-label">2 · prévia obrigatória</span><h2>revise a aba e o mapeamento</h2></div>
+            <span>{preview.totalRows} linha(s) · amostra de até 25</span>
           </div>
-
+          {preview.sheets.length > 0 && (
+            <label>
+              Aba da planilha
+              <select value={preview.selectedSheet} onChange={(event) => loadPreview(batchId, event.target.value)} disabled={busy}>
+                {preview.sheets.map((sheet) => <option key={sheet} value={sheet}>{sheet}</option>)}
+              </select>
+            </label>
+          )}
+          {preview.templates?.length > 0 && (
+            <label>
+              Template salvo para esta fonte
+              <select defaultValue="" onChange={(event) => selectTemplate(event.target.value)}>
+                <option value="">Usar ou ajustar o mapeamento</option>
+                {preview.templates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}
+              </select>
+            </label>
+          )}
+          <div className="abas-grid">
+            {campos.map(([field, label, required]) => (
+              <label key={field}>
+                {label}{required ? ' *' : ' (opcional)'}
+                <select
+                  value={mapping[field] || ''}
+                  onChange={(event) => setMapping((current) => ({ ...current, [field]: event.target.value }))}
+                >
+                  <option value="">Não mapear</option>
+                  {preview.headers.map((header) => <option key={`${field}-${header}`} value={header}>{header}</option>)}
+                </select>
+              </label>
+            ))}
+          </div>
           <div className="tabela-scroll">
             <table className="dados-tabela">
-              <thead>
-                <tr>
-                  <th>Linha</th>
-                  {resultadoAuditoria.colunas.slice(0, 7).map((col) => (
-                    <th key={col}>{col}</th>
-                  ))}
-                  <th>Status</th>
-                </tr>
-              </thead>
+              <thead><tr><th>Linha</th>{preview.headers.map((header) => <th key={header}>{header}</th>)}</tr></thead>
               <tbody>
-                {itensPaginados.map((item) => {
-                  const ehPendente = resultadoAuditoria.pendencias.some((p) => p.linha === item.__linha)
-                  const ehDuplicado = resultadoAuditoria.duplicidades.some((d) => d.linha === item.__linha)
-
-                  return (
-                    <tr key={item.__linha} className={ehPendente ? 'linha-pendente' : ehDuplicado ? 'linha-duplicada' : 'linha-ok'}>
-                      <td>#{item.__linha}</td>
-                      {resultadoAuditoria.colunas.slice(0, 7).map((col) => (
-                        <td key={col}>{item[col]}</td>
-                      ))}
-                      <td>
-                        {ehPendente ? (
-                          <span className="status-tag status-pendente">pendência</span>
-                        ) : ehDuplicado ? (
-                          <span className="status-tag status-aviso">duplicata</span>
-                        ) : (
-                          <span className="status-tag status-ok">conforme</span>
-                        )}
-                      </td>
-                    </tr>
-                  )
-                })}
+                {preview.rows.map((row) => (
+                  <tr key={row.rowNumber}>
+                    <td>#{row.rowNumber}</td>
+                    {preview.headers.map((header) => <td key={header}>{String(row.values[header] ?? '')}</td>)}
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
-
-          {/* Paginação */}
-          <div className="tabela-paginacao">
-            <span>Mostrando {itensExibicao.length} registros ({paginaTabela} de {totalPaginas})</span>
-            <div className="paginacao-botoes">
-              <button
-                type="button"
-                className="button-ghost"
-                disabled={paginaTabela <= 1}
-                onClick={() => setPaginaTabela((p) => Math.max(1, p - 1))}
-              >
-                anterior
-              </button>
-              <button
-                type="button"
-                className="button-ghost"
-                disabled={paginaTabela >= totalPaginas}
-                onClick={() => setPaginaTabela((p) => Math.min(totalPaginas, p + 1))}
-              >
-                próxima
-              </button>
-            </div>
+          <div className="card-heading" style={{ marginTop: 16 }}>
+            <label>
+              Nome do template reutilizável (opcional)
+              <input value={templateName} onChange={(event) => setTemplateName(event.target.value)} maxLength={120} placeholder="Ex.: exportação LIMS diária" />
+            </label>
+            <button type="button" className="button-primary" disabled={!mappingReady || busy || batchStatus !== 'previewed'} onClick={confirmBatch}>
+              confirmar e processar lote
+            </button>
           </div>
+          <p>Ao confirmar, o worker assíncrono classifica cada linha em uma única fila: Aceitos, Rejeitados, Suspeitos ou Pendentes.</p>
         </div>
       )}
+
+      {metrics && (
+        <>
+          <div className="card-heading"><div><span className="mini-label">3 · qualidade multidimensional</span><h2>indicadores independentes (sem nota agregada)</h2></div></div>
+          <div className="auditoria-summary-grid">
+            <div className="metric-card"><span className="metric-label">completude</span><strong>{percentage(metrics.completeness.percent)}</strong><span className="metric-caption">{metrics.completeness.populatedRequiredCells}/{metrics.completeness.requiredCells} campos obrigatórios</span></div>
+            <div className="metric-card"><span className="metric-label">atualidade média</span><strong>{metrics.freshness.averageDelaySeconds == null ? '—' : `${(metrics.freshness.averageDelaySeconds / 60).toFixed(1)} min`}</strong><span className="metric-caption">atraso medição → recebimento</span></div>
+            <div className="metric-card"><span className="metric-label">duplicidade</span><strong>{percentage(metrics.duplication.percent)}</strong><span className="metric-caption">{metrics.duplication.duplicateRows} linha(s) duplicada(s)</span></div>
+            <div className="metric-card"><span className="metric-label">integridade referencial</span><strong>{percentage(metrics.referentialIntegrity.percent)}</strong><span className="metric-caption">{metrics.referentialIntegrity.resolvedRows}/{metrics.referentialIntegrity.totalRows} linhas resolvidas</span></div>
+            <div className="metric-card"><span className="metric-label">unidades reconhecidas</span><strong>{percentage(metrics.recognizedUnits.percent)}</strong><span className="metric-caption">{metrics.recognizedUnits.recognizedRows}/{metrics.recognizedUnits.unitRows} unidades</span></div>
+            <div className="metric-card"><span className="metric-label">conciliação entre fontes</span><strong>{percentage(metrics.sourceReconciliation.percent)}</strong><span className="metric-caption">{metrics.sourceReconciliation.checkedRows} comparação(ões)</span></div>
+            <div className="metric-card"><span className="metric-label">cobertura de indicadores</span><strong>{metrics.indicatorCoverage.distinctIndicators}</strong><span className="metric-caption">{Object.entries(metrics.indicatorCoverage.counts).map(([name, count]) => `${name}: ${count}`).join(' · ') || 'nenhum indicador resolvido'}</span></div>
+          </div>
+          <div className="glass-card">
+            <h2>filas do lote</h2>
+            <div className="abas-grid">
+              {['Aceitos', 'Rejeitados', 'Suspeitos', 'Pendentes'].map((queue) => (
+                <button type="button" className="metric-card" key={queue} onClick={() => openQueue(queue)}>
+                  <span className="metric-label">{queue}</span><strong>{metrics.queues[queue] || 0}</strong>
+                </button>
+              ))}
+            </div>
+            <button type="button" className="button-ghost" onClick={downloadReport}>baixar CSV de erros e suspeitos</button>
+          </div>
+        </>
+      )}
+      {selectedQueue && (
+        <div className="glass-card">
+          <h2>revisão da fila: {selectedQueue}</h2>
+          {queueRows.length === 0 && <p>Nenhuma linha nesta fila.</p>}
+          {queueRows.map((row) => (
+            <details key={row.sourceRowNumber}>
+              <summary>Linha {row.sourceRowNumber} · {row.queue}</summary>
+              <p>{row.issues.map((issue) => issue.message).join(' · ') || 'Sem inconsistências identificadas.'}</p>
+              <pre>{JSON.stringify(row.raw, null, 2)}</pre>
+            </details>
+          ))}
+        </div>
+      )}
+      <div className="glass-card">
+        <h2>histórico de qualidade compartilhado com o dashboard</h2>
+        <div className="tabela-scroll">
+          <table className="dados-tabela">
+            <thead><tr><th>Lote</th><th>Status</th><th>Recebidas</th><th>Aceitos</th><th>Rejeitados</th><th>Suspeitos</th><th>Pendentes</th></tr></thead>
+            <tbody>
+              {qualityHistory.map((entry) => (
+                <tr key={entry.id}>
+                  <td>#{entry.id} · {entry.original_filename}</td>
+                  <td>{STATUS[entry.status] || entry.status}</td>
+                  <td>{entry.receivedCount}</td>
+                  <td>{entry.acceptedCount}</td>
+                  <td>{entry.rejectedCount}</td>
+                  <td>{entry.suspectCount}</td>
+                  <td>{entry.pendingCount}</td>
+                </tr>
+              ))}
+              {!qualityHistory.length && <tr><td colSpan="7">Nenhum lote processado ainda.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </section>
   )
 }

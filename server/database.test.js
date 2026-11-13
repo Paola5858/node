@@ -5,6 +5,8 @@ import { createDatabase, migrateDatabase } from './database.js'
 
 const migrationUrl = new URL('./migrations/001_relational_analytics.sql', import.meta.url)
 const authorizationMigrationUrl = new URL('./migrations/002_rbac_unit_rls.sql', import.meta.url)
+const importPipelineMigrationUrl = new URL('./migrations/003_controlled_import_pipeline.sql', import.meta.url)
+const importTargetsMigrationUrl = new URL('./migrations/004_multi_entity_import_targets.sql', import.meta.url)
 
 test('database selection requires a named, isolated environment', () => {
   assert.throws(() => createDatabase({ environment: 'LOCAL', connectionString: 'postgres://localhost/db' }), /APP_ENV/)
@@ -64,6 +66,32 @@ test('authorization migration adds unit/front RLS, RBAC permissions and privileg
   assert.match(sql, /CREATE POLICY audit_events_no_delete/)
 })
 
+test('controlled import migration versions files, templates, queues and immutable classifications', async () => {
+  const sql = await readFile(importPipelineMigrationUrl, 'utf8')
+  assert.match(sql, /import_batches_hash_version_unique/)
+  assert.match(sql, /reprocess_of/)
+  assert.match(sql, /CREATE TABLE raw\.import_mapping_templates/)
+  assert.match(sql, /CREATE TABLE raw\.import_jobs/)
+  assert.match(sql, /ALTER TABLE analytics\.fact_imports_quality/)
+  assert.match(sql, /import_batches_confirmed_by_fk/)
+  assert.match(sql, /row_queue IN \('Aceitos', 'Rejeitados', 'Suspeitos', 'Pendentes'\)/)
+  assert.match(sql, /technical_rules_valid_range/)
+  assert.match(sql, /CREATE POLICY homologate_rules_only ON operational\.technical_rules AS RESTRICTIVE FOR UPDATE[\s\S]*?current_setting\('app\.access_level', true\) IN \('tactical', 'strategic'\)/)
+  assert.match(sql, /CREATE POLICY technical_rules_draft_insert ON operational\.technical_rules AS RESTRICTIVE FOR INSERT[\s\S]*?current_setting\('app\.access_level', true\) IN \('tactical', 'strategic'\)/)
+  assert.match(sql, /measurements_import_row_unique/)
+  assert.match(sql, /public\.app_rbac_allowed\('imports', 'can_write'\)/)
+})
+
+test('multi-entity import migration versions measurements, loads and quality analyses', async () => {
+  const sql = await readFile(importTargetsMigrationUrl, 'utf8')
+  assert.match(sql, /entity_type IN \('measurements', 'loads', 'quality_analyses'\)/)
+  assert.match(sql, /CREATE UNIQUE INDEX import_batches_hash_version_unique[\s\S]*entity_type/)
+  assert.match(sql, /import_mapping_templates_entity_name_unique/)
+  assert.match(sql, /loads_import_row_unique/)
+  assert.match(sql, /loads_external_reference_unique/)
+  assert.match(sql, /quality_analyses_import_row_unique/)
+})
+
 test('versioned migrations run once and are wrapped in a transaction', async () => {
   const applied = new Set()
   const executed = []
@@ -89,4 +117,6 @@ test('versioned migrations run once and are wrapped in a transaction', async () 
   assert.equal(executed.filter((sql) => sql.includes('CREATE TABLE organizations')).length, 1)
   assert.ok(applied.has('001'))
   assert.ok(applied.has('002'))
+  assert.ok(applied.has('003'))
+  assert.ok(applied.has('004'))
 })
