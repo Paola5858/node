@@ -1,20 +1,52 @@
 import { createHash, randomBytes, scrypt as scryptCallback, timingSafeEqual } from 'node:crypto'
 import { promisify } from 'node:util'
+import { preserveOriginal, retrieveOriginal } from './objectStorage.js'
+import { withSecurityContext } from './database.js'
+import {
+  accessRoles,
+  hasFrontScope,
+  hasPermission,
+  hasUnitScope,
+  isOperationalOrIntern,
+  isStrategicAdmin,
+  provisionOrganizationAuthorization,
+  resolveSecurityContext,
+} from './authorization.js'
 
 const scrypt = promisify(scryptCallback)
 const SESSION_SECONDS = 60 * 60 * 8
-const MAX_BODY_BYTES = 12 * 1024 * 1024
-const reportPadraoLegado = 'https://app.powerbi.com/reportEmbed?reportId=022d42c1-d543-4a0d-9bd8-f3ac742a7ff1&autoAuth=true&ctid=b1051c4b-3b94-41ab-9441-e73a72342fdd'
+const MAX_BODY_BYTES = 14 * 1024 * 1024
 const reportPadrao = 'https://app.powerbi.com/view?r=eyJrIjoiYzBjZTIzNDQtNjcxNi00NmEwLTg1NzQtMDQ3YWE3M2ZkZDEwIiwidCI6ImIxMDUxYzRiLTNiOTQtNDFhYi05NDQxLWU3M2E3MjM0MmZkZCJ9'
-const kinds = new Set(['safra', 'unidade', 'equipamento', 'medicao', 'unidademedida', 'tipoinformacao'])
+const kinds = new Set(['safra', 'unidade', 'frente', 'equipamento', 'medicao', 'unidademedida', 'tipoinformacao'])
 const relations = {
-  equipamento: { unidade: 'unidade' },
+  frente: { unidade: 'unidade' },
+  equipamento: { unidade: 'unidade', frente: 'frente' },
   tipoinformacao: { unidadeMedida: 'unidademedida' },
   medicao: { safra: 'safra', equipamento: 'equipamento', tipoInformacao: 'tipoinformacao' },
+}
+const recordTables = {
+  safra: 'harvests',
+  unidade: 'units',
+  frente: 'fronts',
+  equipamento: 'equipment',
+  medicao: 'measurements',
+  unidademedida: 'unit_of_measure',
+  tipoinformacao: 'indicator_definitions',
+}
+const permissionModules = {
+  indicador: 'analytics',
+  safra: 'harvests',
+  unidade: 'units',
+  frente: 'units',
+  equipamento: 'equipment',
+  medicao: 'measurements',
+  unidademedida: 'catalogs',
+  tipoinformacao: 'catalogs',
 }
 const limits = new Map()
 
 function digest(value) { return createHash('sha256').update(value).digest('hex') }
+function hasControlCharacter(value) { return [...value].some((character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127) }
 function equalHash(a, b) {
   const left = Buffer.from(String(a || ''))
   const right = Buffer.from(String(b || ''))
@@ -47,10 +79,24 @@ function clearCookies(response, secure) {
     `plume_csrf=; Path=/; SameSite=Strict; Max-Age=0${secureFlag}`,
   ])
 }
-function userView(user) {
+function userView(user, accessContext = {}) {
   let favoritos = []
-  try { favoritos = JSON.parse(user.favorites_json || '[]') } catch { favoritos = [] }
-  return { id: user.id, organizationId: user.organization_id, nome: user.name, email: user.email, role: user.role, foto: user.photo_data || null, favoritos }
+  try { favoritos = Array.isArray(user.favorites_json) ? user.favorites_json : JSON.parse(user.favorites_json || '[]') } catch { favoritos = [] }
+  return {
+    id: user.id,
+    organizationId: user.organization_id,
+    nome: user.name,
+    email: user.email,
+    role: user.role,
+    department: accessContext.department || user.department || null,
+    accessLevel: accessContext.accessLevel || user.access_level || null,
+    unitIds: accessContext.allowedUnitIds || [],
+    frontIds: accessContext.allowedFrontIds || [],
+    permissions: accessContext.permissionCodes || [],
+    roles: accessContext.roleNames || [],
+    foto: user.photo_data || null,
+    favoritos,
+  }
 }
 function validPowerBiUrl(value, trustedHosts = []) {
   try {
@@ -77,12 +123,23 @@ function imageIsValid(value) {
   if (match[1] === 'image/jpeg') return bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff
   return bytes.subarray(0, 4).toString() === 'RIFF' && bytes.subarray(8, 12).toString() === 'WEBP'
 }
+async function archiveImage(organizationId, value) {
+  if (!value) return null
+  const [, mediaType, encoded] = /^data:(image\/(?:png|jpeg|webp));base64,([A-Za-z\d+/]+={0,2})$/.exec(value)
+  const extension = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' }[mediaType]
+  return preserveOriginal({
+    organizationId,
+    fileName: `original.${extension}`,
+    contentType: mediaType,
+    bytes: Buffer.from(encoded, 'base64'),
+  })
+}
 async function readBody(request) {
   const chunks = []
   let bytes = 0
   for await (const chunk of request) {
     bytes += chunk.length
-    if (bytes > MAX_BODY_BYTES) throw Object.assign(new Error('o envio ultrapassa o limite de 12 MB.'), { status: 413 })
+    if (bytes > MAX_BODY_BYTES) throw Object.assign(new Error('o envio ultrapassa o limite de 14 MB.'), { status: 413 })
     chunks.push(chunk)
   }
   if (!bytes) return {}
@@ -97,24 +154,114 @@ function limitLogin(request, email) {
   current.count += 1
   return current.count > 8
 }
-function recordView(row) { return { Id: row.id, ...JSON.parse(row.payload) } }
-
-export function createApiHandler({ db, secureCookies = process.env.NODE_ENV === 'production', trustedPowerBiHosts = [], defaultPowerBiUrl = process.env.POWERBI_DEFAULT_EMBED_URL || reportPadrao }) {
-  const nowIso = () => new Date().toISOString()
-  const ownRecord = db.prepare('SELECT id, payload FROM records WHERE id = ? AND organization_id = ? AND kind = ?')
-  const listRecords = db.prepare('SELECT id, payload FROM records WHERE organization_id = ? AND kind = ? ORDER BY id')
-  if (validPowerBiUrl(defaultPowerBiUrl, trustedPowerBiHosts)) {
-    const updateLegacy = db.prepare('UPDATE records SET payload = ?, updated_at = ? WHERE id = ?')
-    const legacyIndicators = db.prepare("SELECT id, payload FROM records WHERE kind = 'indicador'").all()
-    for (const row of legacyIndicators) {
-      const payload = JSON.parse(row.payload)
-      if (payload.Url === reportPadraoLegado) {
-        updateLegacy.run(JSON.stringify({ ...payload, Url: new URL(defaultPowerBiUrl).toString() }), nowIso(), row.id)
-      }
-    }
+function recordView(row) {
+  const payload = typeof row.payload === 'string' ? JSON.parse(row.payload) : row.payload
+  return { Id: Number(row.id), ...payload }
+}
+function payloadFor(kind, body) {
+  return kind === 'indicador'
+    ? { Nome: body.Nome.trim(), Descricao: body.Descricao.trim(), Url: new URL(body.Url).toString() }
+    : body
+}
+function publicPayload(payload) {
+  const { _photoObjectKey, _unitSymbol, ...value } = payload
+  return value
+}
+function forbidden(response) {
+  return error(response, 403, 'permissão insuficiente para esta operação.')
+}
+async function getRecord(db, kind, id, organizationId) {
+  if (kind === 'indicador') {
+    const result = await db.query(
+      'SELECT id, jsonb_build_object(\'Nome\', name, \'Descricao\', description, \'Url\', url) AS payload FROM dashboard_reports WHERE id = $1 AND organization_id = $2',
+      [id, organizationId], organizationId,
+    )
+    return result.rows[0]
   }
+  const table = recordTables[kind]
+  if (!table) return null
+  const result = await db.query(`SELECT id, attributes AS payload FROM ${table} WHERE id = $1 AND organization_id = $2`, [id, organizationId], organizationId)
+  return result.rows[0]
+}
+async function listRecords(db, kind, organizationId) {
+  if (kind === 'indicador') {
+    const result = await db.query(
+      'SELECT id, jsonb_build_object(\'Nome\', name, \'Descricao\', description, \'Url\', url) AS payload FROM dashboard_reports WHERE organization_id = $1 ORDER BY id',
+      [organizationId], organizationId,
+    )
+    return result.rows
+  }
+  const result = await db.query(`SELECT id, attributes AS payload FROM ${recordTables[kind]} WHERE organization_id = $1 ORDER BY id`, [organizationId], organizationId)
+  return result.rows
+}
+async function insertRecord(db, kind, payload, user, organizationId, stamp) {
+  const jsonPayload = JSON.stringify(publicPayload(payload))
+  const queries = {
+    safra: ['INSERT INTO harvests (organization_id, name, starts_on, ends_on, unit_id, photo_object_key, attributes) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb) RETURNING id',
+      [organizationId, payload.nomeSafra, payload.dataInicio, payload.dataFim, payload.unitId || null, payload._photoObjectKey || null, jsonPayload]],
+    unidade: ['INSERT INTO units (organization_id, name, attributes) VALUES ($1, $2, $3::jsonb) RETURNING id', [organizationId, payload.nome, jsonPayload]],
+    frente: ['INSERT INTO fronts (organization_id, name, unit_id, attributes) VALUES ($1, $2, $3, $4::jsonb) RETURNING id',
+      [organizationId, payload.nome, payload.unidade, jsonPayload]],
+    equipamento: ['INSERT INTO equipment (organization_id, name, unit_id, front_id, attributes) VALUES ($1, $2, $3, $4, $5::jsonb) RETURNING id', [organizationId, payload.nome, payload.unidade, payload.frente || null, jsonPayload]],
+    unidademedida: ['INSERT INTO unit_of_measure (organization_id, name, symbol, attributes) VALUES ($1, $2, $3, $4::jsonb) RETURNING id', [organizationId, payload.nome, payload.simbolo, jsonPayload]],
+    tipoinformacao: ['INSERT INTO indicator_definitions (organization_id, name, unit_of_measure_id, attributes) VALUES ($1, $2, $3, $4::jsonb) RETURNING id', [organizationId, payload.nome, payload.unidadeMedida, jsonPayload]],
+  }
+  if (kind === 'indicador') {
+    const result = await db.query(
+      'INSERT INTO dashboard_reports (organization_id, name, description, url, created_by, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $6) RETURNING id',
+      [organizationId, payload.Nome, payload.Descricao, payload.Url, user.id, stamp], organizationId,
+    )
+    return result.rows[0].id
+  }
+  if (kind === 'medicao') {
+    const result = await db.query(
+      `INSERT INTO measurements (
+        organization_id, harvest_id, equipment_id, unit_id, indicator_id, valor_original, unidade_original,
+        valor_normalizado, unidade_normalizada, regra_aplicada, versao_processamento, responsavel_ou_processo,
+        measured_at, received_at, processed_at, released_at, attributes
+      ) VALUES ($1,$2,$3,(SELECT unit_id FROM equipment WHERE organization_id=$1 AND id=$3),$4,$5,$6,$7,$8,NULL,'legacy-api-v1','api',$9,$10,$10,$10,$11::jsonb) RETURNING id`,
+      [organizationId, payload.safra, payload.equipamento, payload.tipoInformacao, String(payload.valor), payload._unitSymbol || '',
+        Number(payload.valor), payload._unitSymbol || '', payload.data, stamp, jsonPayload], organizationId,
+    )
+    return result.rows[0].id
+  }
+  const [sql, values] = queries[kind]
+  const result = await db.query(sql, values, organizationId)
+  return result.rows[0].id
+}
+async function updateRecord(db, kind, id, payload, organizationId, stamp) {
+  if (kind === 'indicador') {
+    await db.query(
+      'UPDATE dashboard_reports SET name = $1, description = $2, url = $3, updated_at = $4 WHERE id = $5 AND organization_id = $6',
+      [payload.Nome, payload.Descricao, payload.Url, stamp, id, organizationId], organizationId,
+    )
+    return
+  }
+  const table = recordTables[kind]
+  const fields = {
+    safra: ['name = $1, starts_on = $2, ends_on = $3, unit_id = $4, photo_object_key = $5, attributes = $6::jsonb', [payload.nomeSafra, payload.dataInicio, payload.dataFim, payload.unitId || null, payload._photoObjectKey || null]],
+    unidade: ['name = $1, attributes = $2::jsonb', [payload.nome]],
+    frente: ['name = $1, unit_id = $2, attributes = $3::jsonb', [payload.nome, payload.unidade]],
+    equipamento: ['name = $1, unit_id = $2, front_id = $3, attributes = $4::jsonb', [payload.nome, payload.unidade, payload.frente || null]],
+    unidademedida: ['name = $1, symbol = $2, attributes = $3::jsonb', [payload.nome, payload.simbolo]],
+    tipoinformacao: ['name = $1, unit_of_measure_id = $2, attributes = $3::jsonb', [payload.nome, payload.unidadeMedida]],
+  }[kind]
+  const [set, values] = fields
+  await db.query(`UPDATE ${table} SET ${set} WHERE id = $${values.length + 2} AND organization_id = $${values.length + 3}`,
+    [...values, JSON.stringify(publicPayload(payload)), id, organizationId], organizationId)
+}
 
-  return async function apiHandler(request, response) {
+export function createApiHandler({
+  db,
+  secureCookies = process.env.NODE_ENV === 'production',
+  trustedPowerBiHosts = [],
+  defaultPowerBiUrl = process.env.POWERBI_DEFAULT_EMBED_URL || reportPadrao,
+}) {
+  const nowIso = () => new Date().toISOString()
+
+  return function apiHandler(request, response) {
+    const requestSecurityContext = {}
+    return withSecurityContext(requestSecurityContext, async () => {
     const url = new URL(request.url, 'http://localhost')
     if (!url.pathname.startsWith('/api/')) return false
     response.setHeader('Referrer-Policy', 'same-origin')
@@ -129,7 +276,6 @@ export function createApiHandler({ db, secureCookies = process.env.NODE_ENV === 
       let body = {}
       if (!['GET', 'HEAD'].includes(request.method)) body = await readBody(request)
       if (!body || typeof body !== 'object' || Array.isArray(body)) return error(response, 400, 'envie um objeto JSON para a operação.')
-
       if (pathname === '/api/health' && request.method === 'GET') return json(response, 200, { status: 'ok' })
 
       if (pathname === '/api/auth/register' && request.method === 'POST') {
@@ -140,80 +286,442 @@ export function createApiHandler({ db, secureCookies = process.env.NODE_ENV === 
           return error(response, 400, 'informe nome, e-mail, organização e uma senha de 12 a 200 caracteres.')
         }
         if (limitLogin(request, 'signup')) return error(response, 429, 'muitas solicitações. aguarde 15 minutos e tente novamente.')
-        const existing = db.prepare('SELECT 1 FROM users WHERE email = ?').get(email)
-        if (existing) return error(response, 409, 'não foi possível concluir o cadastro com esses dados.')
+        const existing = await db.query('SELECT 1 FROM users WHERE email = $1', [email])
+        if (existing.rowCount) return error(response, 409, 'não foi possível concluir o cadastro com esses dados.')
         const salt = randomBytes(16).toString('hex')
         const hash = (await scrypt(body.senha, salt, 64, { N: 16384, r: 8, p: 1 })).toString('hex')
-        const user = { id: cryptoRandomId(), organization_id: cryptoRandomId(), name, email, password_hash: `${salt}:${hash}`, role: 'owner', photo_data: null, created_at: nowIso() }
+        const user = {
+          id: cryptoRandomId(), organization_id: cryptoRandomId(), name, email,
+          password_hash: `${salt}:${hash}`, role: 'owner', department: 'ti',
+          access_level: 'strategic', photo_data: null, favorites_json: [], created_at: nowIso(),
+        }
         const token = randomBytes(32).toString('base64url')
         const csrf = randomBytes(32).toString('base64url')
-        db.exec('BEGIN IMMEDIATE')
         try {
-          db.prepare('INSERT INTO organizations (id, name, created_at) VALUES (?, ?, ?)').run(user.organization_id, organization, user.created_at)
-          db.prepare('INSERT INTO users (id, organization_id, name, email, password_hash, role, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(user.id, user.organization_id, user.name, user.email, user.password_hash, user.role, user.created_at)
-          if (validPowerBiUrl(defaultPowerBiUrl, trustedPowerBiHosts)) {
-            db.prepare('INSERT INTO records (organization_id, kind, payload, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)').run(user.organization_id, 'indicador', JSON.stringify({ Nome: 'Dashboard mobile', Descricao: 'Painel Power BI configurado para esta instalação.', Url: new URL(defaultPowerBiUrl).toString() }), user.id, user.created_at, user.created_at)
-          }
-          db.prepare('INSERT INTO sessions (id, user_id, token_hash, csrf_hash, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)').run(cryptoRandomId(), user.id, digest(token), digest(csrf), Date.now() + SESSION_SECONDS * 1000, user.created_at)
-          db.exec('COMMIT')
-        } catch (cause) { db.exec('ROLLBACK'); if (String(cause).includes('UNIQUE')) return error(response, 409, 'não foi possível concluir o cadastro com esses dados.'); throw cause }
+          await db.transaction(async (client) => {
+            await client.query('INSERT INTO organizations (id, name, created_at) VALUES ($1, $2, $3)', [user.organization_id, organization, user.created_at])
+            await client.query('INSERT INTO users (id, organization_id, name, email, password_hash, role, department, access_level, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)',
+              [user.id, user.organization_id, user.name, user.email, user.password_hash, user.role, user.department, user.access_level, user.created_at])
+            await provisionOrganizationAuthorization(client, user.organization_id, user.id)
+            if (validPowerBiUrl(defaultPowerBiUrl, trustedPowerBiHosts)) {
+              await client.query('INSERT INTO dashboard_reports (organization_id, name, description, url, created_by) VALUES ($1,$2,$3,$4,$5)',
+                [user.organization_id, 'Dashboard mobile', 'Painel Power BI configurado para esta instalação.', new URL(defaultPowerBiUrl).toString(), user.id])
+            }
+            await client.query('INSERT INTO sessions (id,user_id,token_hash,csrf_hash,expires_at,created_at) VALUES ($1,$2,$3,$4,$5,$6)',
+              [cryptoRandomId(), user.id, digest(token), digest(csrf), Date.now() + SESSION_SECONDS * 1000, user.created_at])
+          }, {
+            organizationId: user.organization_id,
+            userId: user.id,
+            allowedUnitIds: ['*'],
+            allowedFrontIds: ['*'],
+            permissionCodes: ['users:can_write', 'reports:can_write'],
+            accessLevel: 'strategic',
+            department: 'ti',
+          })
+        } catch (cause) {
+          if (cause.code === '23505') return error(response, 409, 'não foi possível concluir o cadastro com esses dados.')
+          throw cause
+        }
+        const accessContext = await resolveSecurityContext(db, user)
         setAuthCookies(response, token, csrf, secureCookies)
-        return json(response, 201, { user: userView(user) })
+        return json(response, 201, { user: userView(user, accessContext) })
       }
 
       if (pathname === '/api/auth/login' && request.method === 'POST') {
         const email = String(body.email || '').trim().toLowerCase()
         if (limitLogin(request, email)) return error(response, 429, 'muitas tentativas. aguarde 15 minutos e tente novamente.')
-        const user = db.prepare('SELECT * FROM users WHERE email = ? ORDER BY created_at LIMIT 1').get(email)
+        const result = await db.query('SELECT * FROM users WHERE email = $1 ORDER BY created_at LIMIT 1', [email])
+        const user = result.rows[0]
         const [salt = '', expected = ''] = String(user?.password_hash || '').split(':')
         const actual = (await scrypt(String(body.senha || ''), salt || '00000000000000000000000000000000', 64, { N: 16384, r: 8, p: 1 })).toString('hex')
         if (!user || !equalHash(actual, expected)) return error(response, 401, 'e-mail ou senha inválidos.')
         limits.delete(`${request.socket.remoteAddress || 'unknown'}:${email}`)
         const token = randomBytes(32).toString('base64url')
         const csrf = randomBytes(32).toString('base64url')
-        db.prepare('INSERT INTO sessions (id, user_id, token_hash, csrf_hash, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)').run(cryptoRandomId(), user.id, digest(token), digest(csrf), Date.now() + SESSION_SECONDS * 1000, nowIso())
+        await db.query('INSERT INTO sessions (id,user_id,token_hash,csrf_hash,expires_at,created_at) VALUES ($1,$2,$3,$4,$5,$6)',
+          [cryptoRandomId(), user.id, digest(token), digest(csrf), Date.now() + SESSION_SECONDS * 1000, nowIso()])
+        const accessContext = await resolveSecurityContext(db, user)
         setAuthCookies(response, token, csrf, secureCookies)
-        return json(response, 200, { user: userView(user) })
+        return json(response, 200, { user: userView(user, accessContext) })
       }
 
       const sessionToken = cookieValue(request, 'plume_session')
       const csrfCookie = cookieValue(request, 'plume_csrf')
-      const session = sessionToken ? db.prepare(`SELECT s.id AS session_id, s.csrf_hash, s.expires_at, u.* FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ?`).get(digest(sessionToken)) : null
-      const authenticated = session && session.expires_at > Date.now() ? session : null
-
-      if (pathname === '/api/auth/session' && request.method === 'GET') {
-        if (session && !authenticated) db.prepare('DELETE FROM sessions WHERE id = ?').run(session.session_id)
-        if (!authenticated) return json(response, 200, { user: null })
-        return json(response, 200, { user: userView(authenticated), csrfToken: csrfCookie })
+      const sessionResult = sessionToken
+        ? await db.query('SELECT s.id AS session_id, s.csrf_hash, s.expires_at, u.* FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=$1', [digest(sessionToken)])
+        : { rows: [] }
+      const session = sessionResult.rows[0]
+      const authenticated = session && Number(session.expires_at) > Date.now() ? session : null
+      if (session && !authenticated && pathname === '/api/auth/session' && request.method === 'GET') {
+        await db.query('DELETE FROM sessions WHERE id = $1', [session.session_id])
       }
+      if (pathname === '/api/auth/session' && request.method === 'GET' && !authenticated) return json(response, 200, { user: null })
       if (!authenticated) return error(response, 401, 'autenticação necessária.')
+      const organizationId = authenticated.organization_id
+      const accessContext = await resolveSecurityContext(db, authenticated)
+      Object.assign(requestSecurityContext, accessContext)
+      if (pathname === '/api/auth/session' && request.method === 'GET') {
+        return json(response, 200, { user: userView(authenticated, accessContext), csrfToken: csrfCookie })
+      }
       if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(request.method)) {
-        const origin = request.headers.origin
-        if (origin && request.headers['sec-fetch-site'] === 'cross-site') return error(response, 403, 'origem não autorizada.')
+        if (request.headers.origin && request.headers['sec-fetch-site'] === 'cross-site') return error(response, 403, 'origem não autorizada.')
         const csrfHeader = request.headers['x-csrf-token']
         if (!csrfCookie || !csrfHeader || !equalHash(csrfCookie, csrfHeader) || !equalHash(digest(csrfCookie), authenticated.csrf_hash)) return error(response, 403, 'token de proteção da sessão ausente ou inválido.')
       }
-
       if (pathname === '/api/auth/logout' && request.method === 'POST') {
-        db.prepare('DELETE FROM sessions WHERE id = ?').run(authenticated.session_id)
+        await db.query('DELETE FROM sessions WHERE id = $1', [authenticated.session_id])
         clearCookies(response, secureCookies)
         return json(response, 204, null)
+      }
+      if (pathname === '/api/admin/users' && request.method === 'POST') {
+        if (!isStrategicAdmin(accessContext) || !hasPermission(accessContext, 'users', 'can_write')) return forbidden(response)
+        const name = typeof body.name === 'string' ? body.name.trim() : ''
+        const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : ''
+        const password = body.password
+        const departments = ['qualidade', 'laboratorio', 'agricola', 'industrial', 'ti']
+        const levels = ['operational', 'tactical', 'strategic']
+        const roleName = body.roleName
+        if (name.length < 2 || name.length > 120 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ||
+          email.length > 254 || typeof password !== 'string' || password.length < 12 || password.length > 200 ||
+          !departments.includes(body.department) || !levels.includes(body.accessLevel) ||
+          !['operational', 'intern', 'tactical', 'strategic'].includes(roleName) ||
+          accessRoles[roleName] !== body.accessLevel) {
+          return error(response, 400, 'informe nome, e-mail, senha e perfil organizacional válidos.')
+        }
+        const parseIds = (value) => {
+          if (!Array.isArray(value) || value.length > 500) return null
+          const ids = value.map(Number)
+          if (ids.some((id) => !Number.isSafeInteger(id) || id < 1)) return null
+          return [...new Set(ids)]
+        }
+        const unitIds = parseIds(body.unitIds)
+        const frontIds = parseIds(body.frontIds)
+        if (!unitIds || !frontIds) return error(response, 400, 'as unidades e frentes devem ser listas de identificadores válidos.')
+        const units = unitIds.length
+          ? await db.query('SELECT id FROM units WHERE organization_id=$1 AND id=ANY($2::bigint[])', [organizationId, unitIds], organizationId)
+          : { rows: [] }
+        const fronts = frontIds.length
+          ? await db.query('SELECT id, unit_id FROM fronts WHERE organization_id=$1 AND id=ANY($2::bigint[])', [organizationId, frontIds], organizationId)
+          : { rows: [] }
+        if (units.rowCount !== unitIds.length || fronts.rowCount !== frontIds.length ||
+          fronts.rows.some((front) => front.unit_id !== null && !unitIds.includes(Number(front.unit_id)))) {
+          return error(response, 400, 'uma unidade ou frente não pertence ao escopo informado.')
+        }
+        const salt = randomBytes(16).toString('hex')
+        const passwordHash = (await scrypt(password, salt, 64, { N: 16384, r: 8, p: 1 })).toString('hex')
+        const userId = cryptoRandomId()
+        await db.transaction(async (client) => {
+          await client.query(
+            `INSERT INTO users (id, organization_id, name, email, password_hash, role, department, access_level)
+             VALUES ($1,$2,$3,$4,$5,'member',$6,$7)`,
+            [userId, organizationId, name, email, `${salt}:${passwordHash}`, body.department, body.accessLevel],
+          )
+          await client.query(
+            `INSERT INTO user_roles (organization_id, user_id, role_id)
+             SELECT $1,$2,id FROM roles WHERE organization_id=$1 AND name=$3`,
+            [organizationId, userId, roleName],
+          )
+          if (unitIds.length) {
+            await client.query(
+              'INSERT INTO user_unit_scope (organization_id, user_id, unit_id, assigned_by) SELECT $1,$2,unit_id,$3 FROM unnest($4::bigint[]) AS unit_id',
+              [organizationId, userId, authenticated.id, unitIds],
+            )
+          }
+          if (frontIds.length) {
+            await client.query(
+              'INSERT INTO user_front_scope (organization_id, user_id, front_id, assigned_by) SELECT $1,$2,front_id,$3 FROM unnest($4::bigint[]) AS front_id',
+              [organizationId, userId, authenticated.id, frontIds],
+            )
+          }
+          await client.query(
+            `INSERT INTO audit_events (organization_id, actor_user_id, event_type, entity_type, entity_id, after_data)
+             VALUES ($1,$2,'user_created','user',$3,$4::jsonb)`,
+            [organizationId, authenticated.id, userId, JSON.stringify({ email, department: body.department, accessLevel: body.accessLevel, roleName, unitIds, frontIds })],
+          )
+        }, accessContext)
+        return json(response, 201, { id: userId, name, email, department: body.department, accessLevel: body.accessLevel, roleName, unitIds, frontIds })
+      }
+      const accessMatch = pathname.match(/^\/api\/admin\/users\/([^/]+)\/access$/)
+      if (accessMatch && request.method === 'PATCH') {
+        if (!isStrategicAdmin(accessContext) || !hasPermission(accessContext, 'users', 'can_write')) return forbidden(response)
+        const targetUserId = decodeURIComponent(accessMatch[1])
+        if (targetUserId === authenticated.id) return error(response, 409, 'o perfil do administrador autenticado não pode ser alterado por esta operação.')
+        const departments = ['qualidade', 'laboratorio', 'agricola', 'industrial', 'ti']
+        const levels = ['operational', 'tactical', 'strategic']
+        const roleName = body.roleName
+        if (!departments.includes(body.department) || !levels.includes(body.accessLevel) ||
+          !['operational', 'intern', 'tactical', 'strategic'].includes(roleName) ||
+          accessRoles[roleName] !== body.accessLevel) {
+          return error(response, 400, 'departamento, nível de acesso ou perfil inválido.')
+        }
+        const parseIds = (value) => {
+          if (!Array.isArray(value) || value.length > 500) return null
+          const ids = value.map(Number)
+          if (ids.some((id) => !Number.isSafeInteger(id) || id < 1)) return null
+          return [...new Set(ids)]
+        }
+        const unitIds = parseIds(body.unitIds)
+        const frontIds = parseIds(body.frontIds)
+        if (!unitIds || !frontIds) return error(response, 400, 'as unidades e frentes devem ser listas de identificadores válidos.')
+        const userResult = await db.query(
+          'SELECT id, role, department, access_level FROM users WHERE id=$1 AND organization_id=$2',
+          [targetUserId, organizationId], organizationId,
+        )
+        if (!userResult.rowCount) return error(response, 404, 'usuário não encontrado.')
+        const units = unitIds.length
+          ? await db.query('SELECT id FROM units WHERE organization_id=$1 AND id=ANY($2::bigint[])', [organizationId, unitIds], organizationId)
+          : { rows: [] }
+        const fronts = frontIds.length
+          ? await db.query('SELECT id, unit_id FROM fronts WHERE organization_id=$1 AND id=ANY($2::bigint[])', [organizationId, frontIds], organizationId)
+          : { rows: [] }
+        if (units.rowCount !== unitIds.length || fronts.rowCount !== frontIds.length ||
+          fronts.rows.some((front) => front.unit_id !== null && !unitIds.includes(Number(front.unit_id)))) {
+          return error(response, 400, 'uma unidade ou frente não pertence ao escopo informado.')
+        }
+        const before = {
+          department: userResult.rows[0].department,
+          accessLevel: userResult.rows[0].access_level,
+          unitIds: (await db.query('SELECT unit_id FROM user_unit_scope WHERE organization_id=$1 AND user_id=$2 ORDER BY unit_id',
+            [organizationId, targetUserId], organizationId)).rows.map((row) => Number(row.unit_id)),
+          frontIds: (await db.query('SELECT front_id FROM user_front_scope WHERE organization_id=$1 AND user_id=$2 ORDER BY front_id',
+            [organizationId, targetUserId], organizationId)).rows.map((row) => Number(row.front_id)),
+        }
+        await db.transaction(async (client) => {
+          await client.query('UPDATE users SET department=$1, access_level=$2 WHERE organization_id=$3 AND id=$4',
+            [body.department, body.accessLevel, organizationId, targetUserId])
+          await client.query('DELETE FROM user_unit_scope WHERE organization_id=$1 AND user_id=$2', [organizationId, targetUserId])
+          await client.query('DELETE FROM user_front_scope WHERE organization_id=$1 AND user_id=$2', [organizationId, targetUserId])
+          if (unitIds.length) {
+            await client.query(
+              'INSERT INTO user_unit_scope (organization_id, user_id, unit_id, assigned_by) SELECT $1,$2,unit_id,$3 FROM unnest($4::bigint[]) AS unit_id',
+              [organizationId, targetUserId, authenticated.id, unitIds],
+            )
+          }
+          if (frontIds.length) {
+            await client.query(
+              'INSERT INTO user_front_scope (organization_id, user_id, front_id, assigned_by) SELECT $1,$2,front_id,$3 FROM unnest($4::bigint[]) AS front_id',
+              [organizationId, targetUserId, authenticated.id, frontIds],
+            )
+          }
+          await client.query(
+            `DELETE FROM user_roles ur USING roles r
+             WHERE ur.organization_id=$1 AND ur.user_id=$2 AND r.organization_id=ur.organization_id
+               AND r.id=ur.role_id AND r.name <> 'organization_admin'`,
+            [organizationId, targetUserId],
+          )
+          await client.query(
+            `INSERT INTO user_roles (organization_id, user_id, role_id)
+             SELECT $1,$2,id FROM roles WHERE organization_id=$1 AND name=$3
+             ON CONFLICT DO NOTHING`,
+            [organizationId, targetUserId, roleName],
+          )
+          await client.query(
+            `INSERT INTO audit_events (organization_id, actor_user_id, event_type, entity_type, entity_id, before_data, after_data)
+             VALUES ($1,$2,'user_access_updated','user',$3,$4::jsonb,$5::jsonb)`,
+            [organizationId, authenticated.id, targetUserId, JSON.stringify(before),
+              JSON.stringify({ department: body.department, accessLevel: body.accessLevel, roleName, unitIds, frontIds })],
+          )
+        }, accessContext)
+        return json(response, 200, { userId: targetUserId, department: body.department, accessLevel: body.accessLevel, roleName, unitIds, frontIds })
       }
       if (pathname === '/api/auth/profile' && request.method === 'PATCH') {
         const name = body.nome === undefined ? authenticated.name : String(body.nome).trim()
         const photo = Object.hasOwn(body, 'foto') ? body.foto || null : authenticated.photo_data
-        let favorites = []
-        try { favorites = JSON.parse(authenticated.favorites_json || '[]') } catch { favorites = [] }
+        let favorites = Array.isArray(authenticated.favorites_json) ? authenticated.favorites_json : []
         if (Object.hasOwn(body, 'favoritos')) {
           if (!Array.isArray(body.favoritos) || body.favoritos.length > 500 || body.favoritos.some((id) => !Number.isSafeInteger(Number(id)))) return error(response, 400, 'a lista de favoritos é inválida.')
           const uniqueIds = [...new Set(body.favoritos.map(Number))]
-          const queryIndicator = db.prepare("SELECT 1 FROM records WHERE id = ? AND organization_id = ? AND kind = 'indicador'")
-          if (uniqueIds.some((id) => !queryIndicator.get(id, authenticated.organization_id))) return error(response, 400, 'um indicador favorito não pertence à sua organização.')
+          const rows = uniqueIds.length ? await db.query('SELECT id FROM dashboard_reports WHERE organization_id=$1 AND id=ANY($2::bigint[])', [organizationId, uniqueIds], organizationId) : { rows: [] }
+          if (rows.rowCount !== uniqueIds.length) return error(response, 400, 'um indicador favorito não pertence à sua organização.')
           favorites = uniqueIds
         }
         if (name.length < 2 || name.length > 120 || !imageIsValid(photo)) return error(response, 400, 'informe nome válido e uma foto PNG, JPEG ou WebP de até 8 MB.')
-        db.prepare('UPDATE users SET name = ?, photo_data = ?, favorites_json = ? WHERE id = ?').run(name, photo, JSON.stringify(favorites), authenticated.id)
-        return json(response, 200, { user: userView(db.prepare('SELECT * FROM users WHERE id = ?').get(authenticated.id)) })
+        const photoObject = photo && photo !== authenticated.photo_data ? await archiveImage(organizationId, photo) : null
+        await db.query('UPDATE users SET name=$1, photo_data=$2, photo_object_key=COALESCE($3,photo_object_key), favorites_json=$4::jsonb WHERE id=$5 AND organization_id=$6',
+          [name, photo, photoObject?.key || null, JSON.stringify(favorites), authenticated.id, organizationId], organizationId)
+        const updated = await db.query('SELECT * FROM users WHERE id=$1 AND organization_id=$2', [authenticated.id, organizationId], organizationId)
+        return json(response, 200, { user: userView(updated.rows[0]) })
+      }
+      const releaseMatch = pathname.match(/^\/api\/releases\/(measurements|quality-analyses)\/(\d+)$/)
+      if (releaseMatch && request.method === 'POST') {
+        if (isOperationalOrIntern(accessContext) || !hasPermission(accessContext, 'quality', 'can_approve_release')) return forbidden(response)
+        const [entityType, rawId] = [releaseMatch[1], releaseMatch[2]]
+        const id = Number(rawId)
+        if (!Number.isSafeInteger(id)) return error(response, 400, 'identificador de liberação inválido.')
+        const table = entityType === 'measurements' ? 'measurements' : 'quality_analyses'
+        const idColumn = entityType === 'measurements' ? 'measurement_id' : 'quality_analysis_id'
+        const target = await db.query(`SELECT id, unit_id FROM ${table} WHERE id=$1 AND organization_id=$2`, [id, organizationId], organizationId)
+        if (!target.rowCount) return error(response, 404, 'registro não encontrado.')
+        const unitId = target.rows[0].unit_id
+        if (unitId === null) return error(response, 409, 'o registro não possui usina vinculada para liberação.')
+        if (!hasUnitScope(accessContext, unitId)) return forbidden(response)
+        const justification = typeof body.justification === 'string' ? body.justification.trim() : ''
+        if (justification.length < 10 || justification.length > 2000) return error(response, 400, 'informe uma justificativa de 10 a 2000 caracteres.')
+        await db.transaction(async (client) => {
+          await client.query(
+            `INSERT INTO release_approvals (organization_id, ${idColumn}, unit_id, approved_by, justification)
+             VALUES ($1,$2,$3,$4,$5)`,
+            [organizationId, id, unitId, authenticated.id, justification],
+          )
+          await client.query(
+            `INSERT INTO audit_events (organization_id, actor_user_id, event_type, entity_type, entity_id, after_data)
+             VALUES ($1,$2,'release_approved',$3,$4,$5::jsonb)`,
+            [organizationId, authenticated.id, entityType, String(id), JSON.stringify({ justification, unitId })],
+          )
+        }, accessContext)
+        return json(response, 201, { entityType, id, approvedBy: authenticated.id })
+      }
+      const homologateMatch = pathname.match(/^\/api\/rules\/(\d+)\/homologate$/)
+      if (homologateMatch && request.method === 'POST') {
+        if (isOperationalOrIntern(accessContext) || !hasPermission(accessContext, 'rules', 'can_homologate_rules')) return forbidden(response)
+        const id = Number(homologateMatch[1])
+        const justification = typeof body.justification === 'string' ? body.justification.trim() : ''
+        if (!Number.isSafeInteger(id) || justification.length < 10 || justification.length > 2000) {
+          return error(response, 400, 'identificador ou justificativa inválida.')
+        }
+        const update = await db.query(
+          `UPDATE technical_rules SET homologation_status='homologated', homologated_by=$1, homologated_at=now()
+           WHERE id=$2 AND organization_id=$3 AND homologation_status='draft' RETURNING id`,
+          [authenticated.id, id, organizationId], organizationId,
+        )
+        if (!update.rowCount) {
+          const exists = await db.query('SELECT id FROM technical_rules WHERE id=$1 AND organization_id=$2', [id, organizationId], organizationId)
+          return exists.rowCount ? error(response, 409, 'a regra já foi processada.') : error(response, 404, 'regra não encontrada.')
+        }
+        await db.query(
+          `INSERT INTO audit_events (organization_id, actor_user_id, event_type, entity_type, entity_id, after_data)
+           VALUES ($1,$2,'rule_homologated','technical_rule',$3,$4::jsonb)`,
+          [organizationId, authenticated.id, String(id), JSON.stringify({ justification })], organizationId,
+        )
+        return json(response, 200, { id, status: 'homologated' })
+      }
+      const closeMatch = pathname.match(/^\/api\/periods\/(\d+)\/close$/)
+      if (closeMatch && request.method === 'POST') {
+        if (isOperationalOrIntern(accessContext) || !hasPermission(accessContext, 'periods', 'can_write')) return forbidden(response)
+        const harvestId = Number(closeMatch[1])
+        if (!Number.isSafeInteger(harvestId)) return error(response, 400, 'identificador de safra inválido.')
+        const closed = await db.transaction(async (client) => {
+          await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`${organizationId}:harvest:${harvestId}`])
+          const harvest = await client.query(
+            `SELECT id, unit_id, name, starts_on, ends_on FROM harvests
+             WHERE organization_id=$1 AND id=$2`,
+            [organizationId, harvestId],
+          )
+          if (!harvest.rowCount) return null
+          const unitId = harvest.rows[0].unit_id
+          if (!hasUnitScope(accessContext, unitId)) return null
+          const counts = await client.query(
+            `SELECT
+               (SELECT count(*) FROM measurements WHERE organization_id=$1 AND harvest_id=$2) AS measurements,
+               (SELECT count(*) FROM loads WHERE organization_id=$1 AND harvest_id=$2) AS loads`,
+            [organizationId, harvestId],
+          )
+          const previous = await client.query(
+            'SELECT COALESCE(max(version),0)::integer AS version FROM closure_versions WHERE organization_id=$1 AND harvest_id=$2',
+            [organizationId, harvestId],
+          )
+          const snapshot = {
+            harvest: harvest.rows[0],
+            totals: { measurements: Number(counts.rows[0].measurements), loads: Number(counts.rows[0].loads) },
+            closedAt: nowIso(),
+          }
+          const result = await client.query(
+            `INSERT INTO closure_versions (organization_id, harvest_id, unit_id, version, status, released_by, released_at, snapshot)
+             VALUES ($1,$2,$3,$4,'released',$5,now(),$6::jsonb) RETURNING id, version, released_at`,
+            [organizationId, harvestId, unitId, Number(previous.rows[0].version) + 1, authenticated.id, JSON.stringify(snapshot)],
+          )
+          await client.query(
+            `INSERT INTO audit_events (organization_id, actor_user_id, event_type, entity_type, entity_id, after_data)
+             VALUES ($1,$2,'period_closed','harvest',$3,$4::jsonb)`,
+            [organizationId, authenticated.id, String(harvestId), JSON.stringify({ version: result.rows[0].version, unitId })],
+          )
+          return result.rows[0]
+        }, accessContext)
+        if (!closed) return error(response, 404, 'safra não encontrada.')
+        return json(response, 201, { id: Number(closed.id), harvestId, version: closed.version, releasedAt: closed.released_at })
+      }
+      const exportMatch = pathname.match(/^\/api\/exports\/([a-z]+)$/)
+      if (exportMatch && request.method === 'GET') {
+        const kind = exportMatch[1] === 'indicador' ? 'indicador' : exportMatch[1]
+        const module = permissionModules[kind]
+        if (!module || !kinds.has(kind) && kind !== 'indicador') return error(response, 404, 'rota não encontrada.')
+        if (!hasPermission(accessContext, module, 'can_read') || !hasPermission(accessContext, module, 'can_export')) return forbidden(response)
+        const records = await listRecords(db, kind, organizationId)
+        return json(response, 200, records.map(recordView))
+      }
+      const originalMatch = pathname.match(/^\/api\/imports\/(\d+)\/original$/)
+      if (originalMatch && request.method === 'GET') {
+        if (!hasPermission(accessContext, 'imports', 'can_read') || !hasPermission(accessContext, 'imports', 'can_export')) return forbidden(response)
+        const id = Number(originalMatch[1])
+        if (!Number.isSafeInteger(id)) return error(response, 400, 'identificador de importação inválido.')
+        const batch = await db.query(
+          'SELECT object_key, original_filename FROM import_batches WHERE id=$1 AND organization_id=$2',
+          [id, organizationId], organizationId,
+        )
+        if (!batch.rowCount) return error(response, 404, 'arquivo original não encontrado.')
+        const original = await retrieveOriginal({ organizationId, objectKey: batch.rows[0].object_key })
+        const safeFilename = batch.rows[0].original_filename.replace(/[^\x20-\x7e"\\;]/g, '_')
+        response.writeHead(200, {
+          'Content-Type': original.contentType,
+          'Content-Length': original.bytes.length,
+          'Content-Disposition': `attachment; filename="${safeFilename}"; filename*=UTF-8''${encodeURIComponent(batch.rows[0].original_filename)}`,
+          'Cache-Control': 'no-store',
+          'X-Content-Type-Options': 'nosniff',
+        })
+        response.end(original.bytes)
+        return true
+      }
+      if (pathname === '/api/imports' && request.method === 'POST') {
+        if (!hasPermission(accessContext, 'imports', 'can_write')) return forbidden(response)
+        const fileName = typeof body.fileName === 'string' ? body.fileName : ''
+        const contentType = typeof body.contentType === 'string' ? body.contentType : ''
+        const base64 = typeof body.base64 === 'string' ? body.base64 : ''
+        const allowedTypes = new Map([
+          ['text/csv', '.csv'],
+          ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', '.xlsx'],
+        ])
+        const extension = fileName.slice(fileName.lastIndexOf('.')).toLowerCase()
+        if (fileName.length < 5 || fileName.length > 255 || hasControlCharacter(fileName) ||
+          allowedTypes.get(contentType) !== extension || !/^(?:[A-Za-z\d+/]{4})*(?:[A-Za-z\d+/]{2}==|[A-Za-z\d+/]{3}=)?$/.test(base64) || !base64) {
+          return error(response, 400, 'envie um arquivo CSV ou XLSX válido.')
+        }
+        const bytes = Buffer.from(base64, 'base64')
+        if (bytes.length > 9 * 1024 * 1024) return error(response, 413, 'o arquivo ultrapassa o limite permitido.')
+        let unitId = body.unitId === undefined || body.unitId === null || body.unitId === '' ? null : Number(body.unitId)
+        const frontId = body.frontId === undefined || body.frontId === null || body.frontId === '' ? null : Number(body.frontId)
+        if (unitId === null && accessContext.allowedUnitIds.length === 1 && accessContext.allowedUnitIds[0] !== '*') {
+          unitId = Number(accessContext.allowedUnitIds[0])
+        }
+        if (unitId !== null && (!Number.isSafeInteger(unitId) || !hasUnitScope(accessContext, unitId))) return forbidden(response)
+        if (unitId === null && accessContext.accessLevel !== 'strategic') return forbidden(response)
+        if (frontId !== null && (!Number.isSafeInteger(frontId) || !hasFrontScope(accessContext, frontId))) return forbidden(response)
+        if (unitId !== null) {
+          const unit = await db.query('SELECT id FROM units WHERE id=$1 AND organization_id=$2', [unitId, organizationId], organizationId)
+          if (!unit.rowCount) return error(response, 404, 'usina não encontrada.')
+        }
+        if (frontId !== null) {
+          const front = await db.query('SELECT id FROM fronts WHERE id=$1 AND organization_id=$2 AND unit_id=$3', [frontId, organizationId, unitId], organizationId)
+          if (!front.rowCount) return error(response, 404, 'frente não encontrada.')
+        }
+        const original = await preserveOriginal({ organizationId, fileName, contentType, bytes })
+        const source = await db.query(
+          "INSERT INTO sources (organization_id, name, source_type, authorized_read_only) VALUES ($1, 'portal-file-upload', 'file', true) ON CONFLICT (organization_id, name) DO NOTHING RETURNING id",
+          [organizationId], organizationId,
+        )
+        let sourceId = source.rows[0]?.id
+        if (!sourceId) {
+          const existingSource = await db.query(
+            'SELECT id FROM sources WHERE organization_id=$1 AND name=$2',
+            [organizationId, 'portal-file-upload'], organizationId,
+          )
+          if (!existingSource.rowCount) throw new Error('não foi possível criar a fonte de importação.')
+          sourceId = existingSource.rows[0].id
+        }
+        const batch = await db.query(
+          'INSERT INTO import_batches (organization_id, source_id, uploaded_by, unit_id, front_id, object_key, original_filename, content_sha256) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id, received_at, status',
+          [organizationId, sourceId, authenticated.id, unitId, frontId, original.key, fileName, original.sha256], organizationId,
+        )
+        return json(response, 201, { id: Number(batch.rows[0].id), fileName, sha256: original.sha256, receivedAt: batch.rows[0].received_at, status: batch.rows[0].status })
       }
 
       const indicatorMatch = pathname.match(/^\/api\/indicador(?:\/(\d+))?$/)
@@ -221,87 +729,133 @@ export function createApiHandler({ db, secureCookies = process.env.NODE_ENV === 
       const kind = indicatorMatch ? 'indicador' : recordMatch && kinds.has(recordMatch[1]) ? recordMatch[1] : null
       const recordId = indicatorMatch?.[1] || recordMatch?.[2]
       if (!kind) return error(response, 404, 'rota não encontrada.')
+      const module = permissionModules[kind]
+      const action = ['GET', 'HEAD'].includes(request.method) ? 'can_read' : 'can_write'
+      if (!hasPermission(accessContext, module, action)) return forbidden(response)
       if (['GET', 'HEAD'].includes(request.method)) {
         if (recordId) {
-          const row = ownRecord.get(Number(recordId), authenticated.organization_id, kind)
+          const row = await getRecord(db, kind, Number(recordId), organizationId)
           if (!row) return error(response, 404, 'registro não encontrado.')
           return json(response, 200, recordView(row))
         }
-        return json(response, 200, listRecords.all(authenticated.organization_id, kind).map(recordView))
+        return json(response, 200, (await listRecords(db, kind, organizationId)).map(recordView))
       }
       if (!['POST', 'PUT', 'DELETE'].includes(request.method)) return error(response, 405, 'método não permitido.')
       if (kind === 'indicador' && request.method !== 'DELETE') {
         const { Nome, Descricao, Url } = body
         if (typeof Nome !== 'string' || !Nome.trim() || Nome.trim().length > 160 || typeof Descricao !== 'string' || !Descricao.trim() || Descricao.trim().length > 2000 || !validPowerBiUrl(Url, trustedPowerBiHosts)) return error(response, 400, 'informe nome, descrição e URL reportEmbed válida do Power BI com reportId e ctid.')
       } else if (request.method !== 'DELETE') {
-        const payload = body && typeof body === 'object' && !Array.isArray(body) ? body : {}
+        const payload = body
         if (!Object.keys(payload).length || JSON.stringify(payload).length > 10 * 1024 * 1024) return error(response, 400, 'informe os campos do registro.')
         const required = {
           safra: ['nomeSafra', 'dataInicio', 'dataFim', 'foto'],
           unidade: ['nome'],
+          frente: ['nome', 'unidade'],
           equipamento: ['nome', 'unidade'],
           medicao: ['safra', 'equipamento', 'tipoInformacao', 'valor', 'data'],
           unidademedida: ['nome', 'simbolo'],
           tipoinformacao: ['nome', 'unidadeMedida'],
         }[kind]
         if (required.some((field) => payload[field] === undefined || payload[field] === '')) return error(response, 400, 'preencha todos os campos obrigatórios.')
+        if (kind === 'safra' && (payload.unitId === undefined || payload.unitId === '')) {
+          if (accessContext.allowedUnitIds.length === 1 && accessContext.allowedUnitIds[0] !== '*') {
+            payload.unitId = Number(accessContext.allowedUnitIds[0])
+          } else if (accessContext.accessLevel !== 'strategic') {
+            return forbidden(response)
+          }
+        }
+        if (kind === 'safra' && payload.unitId != null && !Number.isSafeInteger(Number(payload.unitId))) return error(response, 400, 'identificador de usina inválido.')
+        if (kind === 'safra' && payload.unitId != null && !hasUnitScope(accessContext, payload.unitId)) return forbidden(response)
+        if (kind === 'safra' && payload.unitId != null) {
+          const unit = await getRecord(db, 'unidade', Number(payload.unitId), organizationId)
+          if (!unit) return error(response, 400, 'a usina não pertence à sua organização.')
+          payload.unitId = Number(payload.unitId)
+        }
         if (kind === 'safra' && (!/^\d{4}-\d{2}-\d{2}$/.test(payload.dataInicio) || !/^\d{4}-\d{2}-\d{2}$/.test(payload.dataFim) || payload.dataFim < payload.dataInicio)) return error(response, 400, 'informe um intervalo de datas válido para a safra.')
         if (kind === 'medicao' && (!Number.isFinite(Number(payload.valor)) || !Number.isFinite(Date.parse(payload.data)))) return error(response, 400, 'informe um valor numérico e uma data válidos para a medição.')
         for (const [field, relationKind] of Object.entries(relations[kind] || {})) {
           if (payload[field] === undefined || payload[field] === '') continue
-          const relation = ownRecord.get(Number(payload[field]), authenticated.organization_id, relationKind)
-          if (!Number.isSafeInteger(Number(payload[field])) || !relation) return error(response, 400, `a referência de ${field} não pertence à sua organização.`)
+          if (!Number.isSafeInteger(Number(payload[field]))) return error(response, 400, `a referência de ${field} não é válida.`)
+          const relation = await getRecord(db, relationKind, Number(payload[field]), organizationId)
+          if (!relation) return error(response, 400, `a referência de ${field} não pertence à sua organização.`)
+        }
+        if (['frente', 'equipamento'].includes(kind) && !hasUnitScope(accessContext, payload.unidade)) return forbidden(response)
+        if (kind === 'equipamento' && payload.frente) {
+          if (!hasFrontScope(accessContext, payload.frente)) return forbidden(response)
+          const front = await db.query(
+            'SELECT id FROM fronts WHERE id=$1 AND organization_id=$2 AND unit_id=$3',
+            [payload.frente, organizationId, payload.unidade], organizationId,
+          )
+          if (!front.rowCount) return error(response, 400, 'a frente não pertence à usina selecionada.')
+        }
+        if (kind === 'medicao') {
+          const equipment = await db.query(
+            'SELECT unit_id, front_id FROM equipment WHERE id=$1 AND organization_id=$2',
+            [payload.equipamento, organizationId], organizationId,
+          )
+          if (!equipment.rowCount) return error(response, 400, 'o equipamento não pertence à sua organização.')
+          if (!hasUnitScope(accessContext, equipment.rows[0].unit_id) ||
+            (equipment.rows[0].front_id !== null && !hasFrontScope(accessContext, equipment.rows[0].front_id))) return forbidden(response)
         }
         if (Object.hasOwn(payload, 'foto') && !imageIsValid(payload.foto)) return error(response, 400, 'a imagem deve ser PNG, JPEG ou WebP e ter até 8 MB.')
         for (const field of Object.keys(relations[kind] || {})) if (payload[field] !== undefined) payload[field] = Number(payload[field])
       }
       const stamp = nowIso()
+      let payload = payloadFor(kind, body)
       if (request.method === 'POST') {
-        const result = db.prepare('INSERT INTO records (organization_id, kind, payload, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)').run(authenticated.organization_id, kind, JSON.stringify(kind === 'indicador' ? { Nome: body.Nome.trim(), Descricao: body.Descricao.trim(), Url: new URL(body.Url).toString() } : body), authenticated.id, stamp, stamp)
-        return json(response, 201, recordView({ id: Number(result.lastInsertRowid), payload: JSON.stringify(kind === 'indicador' ? { Nome: body.Nome.trim(), Descricao: body.Descricao.trim(), Url: new URL(body.Url).toString() } : body) }))
+        if (kind === 'safra' && payload.foto) payload._photoObjectKey = (await archiveImage(organizationId, payload.foto)).key
+        if (kind === 'medicao') {
+          const indicator = await db.query('SELECT u.symbol FROM indicator_definitions i LEFT JOIN unit_of_measure u ON u.id=i.unit_of_measure_id AND u.organization_id=i.organization_id WHERE i.id=$1 AND i.organization_id=$2',
+            [payload.tipoInformacao, organizationId], organizationId)
+          payload._unitSymbol = indicator.rows[0]?.symbol || ''
+        }
+        const id = await insertRecord(db, kind, payload, authenticated, organizationId, stamp)
+        return json(response, 201, recordView({ id, payload: publicPayload(payload) }))
       }
-      const current = ownRecord.get(Number(recordId), authenticated.organization_id, kind)
+      const current = await getRecord(db, kind, Number(recordId), organizationId)
       if (!current) return error(response, 404, 'registro não encontrado.')
+      if (kind === 'medicao') return error(response, 409, 'medições são imutáveis; registre uma nova medição para corrigir o dado.')
       if (request.method === 'DELETE') {
-        for (const [parentKind, fields] of Object.entries(relations)) {
-          for (const [field, relatedKind] of Object.entries(fields)) {
-            if (relatedKind !== kind) continue
-            const dependency = db.prepare(`SELECT 1 FROM records WHERE organization_id = ? AND kind = ? AND json_extract(payload, '$.${field}') = ? LIMIT 1`).get(authenticated.organization_id, parentKind, Number(recordId))
-            if (dependency) return error(response, 409, 'este registro ainda está associado a outros dados.')
-          }
-        }
         if (kind === 'indicador') {
-          const users = db.prepare('SELECT id, favorites_json FROM users WHERE organization_id = ?').all(authenticated.organization_id)
-          const updateFavorites = db.prepare('UPDATE users SET favorites_json = ? WHERE id = ?')
-          for (const user of users) {
-            let favorites = []
-            try { favorites = JSON.parse(user.favorites_json || '[]') } catch { favorites = [] }
-            updateFavorites.run(JSON.stringify(favorites.filter((id) => String(id) !== String(recordId))), user.id)
-          }
+          await db.transaction(async (client) => {
+            const users = await client.query('SELECT id, favorites_json FROM users WHERE organization_id=$1', [organizationId])
+            for (const user of users.rows) {
+              const favorites = (Array.isArray(user.favorites_json) ? user.favorites_json : []).filter((id) => String(id) !== String(recordId))
+              await client.query('UPDATE users SET favorites_json=$1::jsonb WHERE id=$2 AND organization_id=$3', [JSON.stringify(favorites), user.id, organizationId])
+            }
+            await client.query('DELETE FROM dashboard_reports WHERE id=$1 AND organization_id=$2', [Number(recordId), organizationId])
+          }, organizationId)
+        } else {
+          await db.query(`DELETE FROM ${recordTables[kind]} WHERE id=$1 AND organization_id=$2`, [Number(recordId), organizationId], organizationId)
         }
-        db.prepare('DELETE FROM records WHERE id = ? AND organization_id = ? AND kind = ?').run(Number(recordId), authenticated.organization_id, kind)
         return json(response, 204, null)
       }
-      db.prepare('UPDATE records SET payload = ?, updated_at = ? WHERE id = ? AND organization_id = ? AND kind = ?').run(JSON.stringify(kind === 'indicador' ? { Nome: body.Nome.trim(), Descricao: body.Descricao.trim(), Url: new URL(body.Url).toString() } : body), stamp, Number(recordId), authenticated.organization_id, kind)
-      return json(response, 200, recordView({ id: Number(recordId), payload: JSON.stringify(kind === 'indicador' ? { Nome: body.Nome.trim(), Descricao: body.Descricao.trim(), Url: new URL(body.Url).toString() } : body) }))
+      if (kind === 'safra' && payload.foto) payload._photoObjectKey = (await archiveImage(organizationId, payload.foto)).key
+      await updateRecord(db, kind, Number(recordId), payload, organizationId, stamp)
+      return json(response, 200, recordView({ id: Number(recordId), payload: publicPayload(payload) }))
     } catch (cause) {
       if (cause.status) return error(response, cause.status, cause.message)
-      if (cause.code === 'ERR_SQLITE_ERROR') return error(response, 500, 'não foi possível concluir a operação no armazenamento.')
+      if (cause.code === '42501') return forbidden(response)
+      if (cause.code === '23503') return error(response, 409, 'este registro ainda está associado a outros dados ou contém uma referência inválida.')
+      if (cause.code === '23505') return error(response, 409, 'já existe um registro com esses dados nesta organização.')
+      process.stderr.write(`[api] ${request.method} ${pathname}: ${cause.message}\n`)
       return error(response, 500, 'erro interno do serviço.')
     } finally {
       if (process.env.NODE_ENV !== 'test' && !process.env.VITEST) {
-        const ms = Date.now() - startMs
-        process.stdout.write(`[${new Date().toISOString()}] ${request.method} ${pathname} - ${ms}ms\n`)
+        process.stdout.write(`[${new Date().toISOString()}] ${request.method} ${pathname} - ${Date.now() - startMs}ms\n`)
       }
     }
+    })
   }
 }
 
 export function startSessionCleanup(db) {
-  const cleanup = db.prepare('DELETE FROM sessions WHERE expires_at <= ?')
-  return setInterval(() => {
-    try { cleanup.run(Date.now()) } catch { /* ignore */ }
+  const timer = setInterval(() => {
+    db.query('DELETE FROM sessions WHERE expires_at <= $1', [Date.now()])
+      .catch((cause) => process.stderr.write(`[sessions] cleanup failed: ${cause.message}\n`))
   }, 60 * 60 * 1000)
+  timer.unref()
+  return timer
 }
 
 function cryptoRandomId() { return randomBytes(16).toString('hex') }

@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useRef } from 'react'
+import { preservarArquivoOriginal } from '../services/api'
 
 // Estruturas de referência do setor sucroenergético
 const MODELOS_ABAS = {
@@ -176,7 +177,11 @@ function validarRegistrosIndustriais(registros, abaAtiva) {
 function ImportacaoExcelPage({ sessao }) {
   const [abaSelecionada, setAbaSelecionada] = useState('Fato_Medicoes')
   const [nomeArquivo, setNomeArquivo] = useState('')
+  const [unidadeSelecionada, setUnidadeSelecionada] = useState(
+    sessao?.unitIds?.length === 1 && sessao.unitIds[0] !== '*' ? String(sessao.unitIds[0]) : '',
+  )
   const [conteudoBruto, setConteudoBruto] = useState('')
+  const [statusImportacao, setStatusImportacao] = useState('')
   const [resultadoAuditoria, setResultadoAuditoria] = useState(null)
   const [paginaTabela, setPaginaTabela] = useState(1)
   const [filtroTexto, setFiltroTexto] = useState('')
@@ -198,6 +203,11 @@ function ImportacaoExcelPage({ sessao }) {
       const texto = e.target.result
       setConteudoBruto(texto)
       analisarDados(texto, arquivo.name)
+      setStatusImportacao('Arquivando o original...')
+      const options = unidadeSelecionada ? { unitId: Number(unidadeSelecionada) } : {}
+      preservarArquivoOriginal(arquivo, options)
+        .then((lote) => setStatusImportacao(`Original arquivado no lote ${lote.id} (SHA-256: ${lote.sha256}).`))
+        .catch((cause) => setStatusImportacao(`Falha ao arquivar o original: ${cause.message}`))
     }
     leitor.onerror = () => {
       alert('Não foi possível ler o arquivo selecionado.')
@@ -316,18 +326,28 @@ function ImportacaoExcelPage({ sessao }) {
 
       {/* Zona de Drop e Upload */}
       <div className="glass-card import-dropzone-card">
+        {Array.isArray(sessao?.unitIds) && sessao.unitIds.length > 1 && !sessao.unitIds.includes('*') && (
+          <label>
+            Usina da importação
+            <select value={unidadeSelecionada} onChange={(event) => setUnidadeSelecionada(event.target.value)} required>
+              <option value="">Selecione uma usina</option>
+              {sessao.unitIds.map((id) => <option key={id} value={id}>Usina #{id}</option>)}
+            </select>
+          </label>
+        )}
         <input
           type="file"
           ref={fileInputRef}
-          accept=".csv,.txt"
+          accept=".csv"
           style={{ display: 'none' }}
           onChange={lidarComArquivo}
         />
         <div className="upload-box" onClick={() => fileInputRef.current?.click()}>
           <div className="upload-box-icon" aria-hidden="true">📊</div>
           <div>
-            <h3>{nomeArquivo ? `Arquivo selecionado: ${nomeArquivo}` : 'Selecione ou arraste a planilha CSV / Excel exportado'}</h3>
+            <h3>{nomeArquivo ? `Arquivo selecionado: ${nomeArquivo}` : 'Selecione uma planilha CSV exportada'}</h3>
             <p>Compatível com padrões SCADA, PIMS, LIMS e planilhas de apontamento diário (separador ';' ou ',')</p>
+            {statusImportacao && <p aria-live="polite">{statusImportacao}</p>}
           </div>
           <button type="button" className="button-primary">
             escolher arquivo <span>↑</span>

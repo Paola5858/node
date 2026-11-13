@@ -53,6 +53,31 @@ export async function api(recurso, metodo = 'GET', dados = null, id = null) {
   })
 }
 
+export async function preservarArquivoOriginal(file, { unitId, frontId } = {}) {
+  const extension = file.name.slice(file.name.lastIndexOf('.')).toLowerCase()
+  const contentType = {
+    '.csv': 'text/csv',
+    '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  }[extension]
+  if (!contentType) throw new Error('selecione um arquivo CSV ou XLSX.')
+  if (file.size > 9 * 1024 * 1024) throw new Error('o arquivo ultrapassa o limite permitido de 9 MB.')
+  const bytes = new Uint8Array(await file.arrayBuffer())
+  let binary = ''
+  for (let offset = 0; offset < bytes.length; offset += 32_768) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 32_768))
+  }
+  return requisicao(`${apiBase}/imports`, {
+    method: 'POST',
+    body: JSON.stringify({
+      fileName: file.name,
+      contentType,
+      base64: btoa(binary),
+      ...(unitId === undefined ? {} : { unitId }),
+      ...(frontId === undefined ? {} : { frontId }),
+    }),
+  })
+}
+
 export const cadastroApi = {
   listar: (recurso) => api(recurso),
   consultar: (recurso, id) => api(recurso, 'GET', null, id),
