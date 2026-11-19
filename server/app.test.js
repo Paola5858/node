@@ -20,6 +20,59 @@ test('healthcheck does not query tenant data', async (t) => {
   assert.deepEqual(await response.json(), { status: 'ok' })
 })
 
+test('metric lineage returns a structured block when no homologated version exists', async (t) => {
+  const db = {
+    async query(sql) {
+      if (sql.includes('FROM sessions s JOIN users u')) {
+        return {
+          rows: [{
+            session_id: 'session',
+            csrf_hash: '',
+            expires_at: Date.now() + 60_000,
+            id: 'user',
+            organization_id: 'org',
+            department: 'ti',
+            access_level: 'strategic',
+          }],
+        }
+      }
+      if (sql.includes('FROM users u') && sql.includes('user_unit_scope')) {
+        return {
+          rowCount: 1,
+          rows: [{
+            department: 'ti',
+            access_level: 'strategic',
+            unit_ids: [],
+            front_ids: [],
+            permission_codes: ['analytics:can_read'],
+            role_names: ['organization_admin'],
+          }],
+        }
+      }
+      if (sql.includes('FROM metric_definitions m')) return { rows: [] }
+      throw new Error(`unexpected database query: ${sql}`)
+    },
+  }
+  const api = createApiHandler({ db })
+  const server = createServer(async (request, response) => {
+    const handled = await api(request, response)
+    if (handled === false) response.writeHead(404).end()
+  })
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  t.after(() => new Promise((resolve) => server.close(resolve)))
+
+  const response = await fetch(
+    `http://127.0.0.1:${server.address().port}/api/metrics/ATR_WEIGHTED/lineage?start=2026-01-01&end=2026-01-31`,
+    { headers: { Cookie: 'plume_session=token' } },
+  )
+  assert.equal(response.status, 200)
+  const lineage = await response.json()
+  assert.equal(lineage.status, 'blocked')
+  assert.equal(lineage.value, null)
+  assert.equal(lineage.period.start, '2026-01-01')
+  assert.equal(lineage.blockers[0].code, 'formula_not_homologated')
+})
+
 test('PostgreSQL API isolates tenants, unit scopes, exports, attachments, and privileged actions', {
   skip: !process.env.DATABASE_URL_DEV && 'set DATABASE_URL_DEV to run PostgreSQL integration tests',
 }, async (t) => {

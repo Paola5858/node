@@ -282,11 +282,15 @@ export function validateTargetImportRows(document, batch, references, receivedAt
       const externalReference = String(values.external_reference ?? '').trim()
       const grossWeight = parseNumeric(values.gross_weight)
       const tareWeight = parseNumeric(values.tare_weight)
+      const weightUnit = String(values.weight_unit ?? '').trim().toLowerCase()
       if (!externalReference) addIssue(issues, 'structural', 'missing_load_reference', 'identificador único da carga ausente.')
       if (!String(values.gross_weight ?? '').trim()) addIssue(issues, 'structural', 'missing_gross_weight', 'peso bruto ausente.')
       else if (grossWeight === null) addIssue(issues, 'typing', 'invalid_gross_weight', 'peso bruto não é numérico.')
       if (!String(values.tare_weight ?? '').trim()) addIssue(issues, 'structural', 'missing_tare_weight', 'tara ausente.')
       else if (tareWeight === null) addIssue(issues, 'typing', 'invalid_tare_weight', 'tara não é numérica.')
+      if (weightUnit && !['kg', 'quilograma', 'quilogramas', 't', 'ton', 'tonne', 'tonnes', 'tonelada', 'toneladas'].includes(weightUnit)) {
+        addIssue(issues, 'typing', 'invalid_weight_unit', 'a unidade do peso deve ser kg ou tonelada.')
+      }
       for (const [field, weight] of [['gross_weight', grossWeight], ['tare_weight', tareWeight]]) {
         if (weight !== null && (
           weight >= 10_000_000_000_000
@@ -323,6 +327,7 @@ export function validateTargetImportRows(document, batch, references, receivedAt
       payload = measuredAt && externalReference && grossWeight !== null && tareWeight !== null
         ? {
             externalReference, weighedAt: measuredAt.toISOString(), grossWeight, tareWeight,
+            weightUnit: weightUnit || null,
             ...related,
             supplierName: String(values.supplier ?? '').trim(),
             farmName: String(values.farm ?? '').trim(),
@@ -748,13 +753,14 @@ async function processBatch(db, job) {
           const createdLoad = await client.query(
             `INSERT INTO loads (
                organization_id, harvest_id, supplier_id, farm_id, plot_id, front_id, unit_id, source_id,
-               external_reference, gross_weight, tare_weight, weighed_at, import_batch_id, source_row_number
-             ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+               external_reference, gross_weight, tare_weight, weight_unit, weighed_at, import_batch_id, source_row_number
+             ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
              RETURNING id`,
             [
               batch.organization_id, batch.harvest_id, value.supplierId || null, value.farmId || null,
               value.plotId || null, value.frontId || batch.front_id, batch.unit_id, batch.source_id,
-              value.externalReference, value.grossWeight, value.tareWeight, value.weighedAt, batch.id, row.sourceRowNumber,
+              value.externalReference, value.grossWeight, value.tareWeight, value.weightUnit,
+              value.weighedAt, batch.id, row.sourceRowNumber,
             ],
           )
           const dims = await ensureImportFactDimensions(client, batch, new Date(value.weighedAt))

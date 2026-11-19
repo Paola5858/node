@@ -27,3 +27,18 @@ test('intern role remains operational even if a misconfigured access level is el
     roleNames: ['intern'],
   }), true)
 })
+
+test('quality and laboratory departments can access occurrence workflows', () => {
+  for (const department of ['qualidade', 'laboratorio']) {
+    assert.equal(hasPermission({
+      department,
+      roleNames: ['tactical'],
+      permissionCodes: ['occurrences:can_read', 'occurrences:can_write'],
+    }, 'occurrences', 'can_read'), true)
+    assert.equal(hasPermission({
+      department,
+      roleNames: ['tactical'],
+      permissionCodes: ['occurrences:can_write'],
+    }, 'occurrences', 'can_write'), true)
+  }
+})

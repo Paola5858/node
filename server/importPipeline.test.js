@@ -135,6 +135,23 @@ test('load import preserves distinct loads that have the same weight', async () 
   assert.notEqual(result.rows[0].normalizedPayload.externalReference, result.rows[1].normalizedPayload.externalReference)
 })
 
+test('load import retains an explicitly mapped weight unit for metric calculations', async () => {
+  const weighedAt = new Date(Date.now() - 60_000).toISOString()
+  const document = await parseImportFile(Buffer.from([
+    'REFERENCIA;DATA_PESAGEM;PESO_BRUTO;TARA;UNIDADE_PESO',
+    `CARGA-200;${weighedAt};50000;10000;kg`,
+  ].join('\n')), 'cargas-com-unidade.csv')
+  const mapping = suggestColumnMapping(document.headers, 'loads')
+  assert.equal(mapping.weight_unit, 'UNIDADE_PESO')
+  const result = validateTargetImportRows(
+    document,
+    { entity_type: 'loads', source_id: 1, unit_id: 2, mapping_json: mapping },
+    { loads: new Map(), suppliers: new Map(), farms: new Map(), plots: new Map(), fronts: new Map() },
+    new Date(),
+  )
+  assert.equal(result.rows[0].normalizedPayload.weightUnit, 'kg')
+})
+
 test('quality analysis import checks references, scale and cross-source reconciliation', async () => {
   const measuredAt = new Date(Date.now() - 60_000).toISOString()
   const document = await parseImportFile(Buffer.from([

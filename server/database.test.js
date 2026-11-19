@@ -7,6 +7,8 @@ const migrationUrl = new URL('./migrations/001_relational_analytics.sql', import
 const authorizationMigrationUrl = new URL('./migrations/002_rbac_unit_rls.sql', import.meta.url)
 const importPipelineMigrationUrl = new URL('./migrations/003_controlled_import_pipeline.sql', import.meta.url)
 const importTargetsMigrationUrl = new URL('./migrations/004_multi_entity_import_targets.sql', import.meta.url)
+const versionedMetricsMigrationUrl = new URL('./migrations/005_versioned_metrics.sql', import.meta.url)
+const operationalWorkflowMigrationUrl = new URL('./migrations/006_operational_traceability_workflow.sql', import.meta.url)
 
 test('database selection requires a named, isolated environment', () => {
   assert.throws(() => createDatabase({ environment: 'LOCAL', connectionString: 'postgres://localhost/db' }), /APP_ENV/)
@@ -92,6 +94,47 @@ test('multi-entity import migration versions measurements, loads and quality ana
   assert.match(sql, /quality_analyses_import_row_unique/)
 })
 
+test('versioned metrics migration persists homologation, provenance and explicit load weight units', async () => {
+  const sql = await readFile(versionedMetricsMigrationUrl, 'utf8')
+  assert.match(sql, /CREATE TABLE operational\.metric_definitions/)
+  for (const field of [
+    'code', 'unit', 'granularity', 'aggregation_rule', 'required_fields',
+    'minimum_value', 'maximum_value', 'tolerance', 'target_value',
+    'desirable_direction', 'technical_source', 'valid_from', 'rule_version',
+    'homologated_by', 'homologated_at',
+  ]) assert.match(sql, new RegExp(`\\b${field}\\b`))
+  assert.match(sql, /metric_definitions_are_versioned/)
+  assert.match(sql, /ADD COLUMN weight_unit/)
+  assert.match(sql, /public\.app_rbac_allowed\('analytics', 'can_read'\)/)
+  assert.match(sql, /CREATE TABLE operational\.harvest_production_records/)
+  assert.match(sql, /harvest_production_records_are_immutable/)
+  assert.match(sql, /harvest_production_insert/)
+})
+
+test('operational workflow migration adds traceability, independent states and append-only audit', async () => {
+  const sql = await readFile(operationalWorkflowMigrationUrl, 'utf8')
+  for (const table of [
+    'load_weighings', 'equipment_calibrations', 'record_states', 'occurrence_evidence',
+    'occurrence_workflow_events', 'occurrence_verifications', 'audit_logs',
+    'metric_recalculation_events',
+  ]) assert.match(sql, new RegExp(`CREATE TABLE operational\\.${table} \\(`))
+  for (const state of [
+    'operational_condition', 'data_condition', 'attention_priority', 'investigation_status',
+    'release_status', 'origin_status',
+  ]) assert.match(sql, new RegExp(`\\b${state}\\b`))
+  for (const table of [
+    'load_weighings', 'equipment_calibrations', 'occurrence_evidence',
+    'occurrence_workflow_events', 'occurrence_verifications', 'audit_logs',
+    'metric_recalculation_events',
+  ]) assert.match(sql, new RegExp(`CREATE TRIGGER ${table}_are_immutable`))
+  assert.match(sql, /CREATE FUNCTION operational\.prevent_append_only_mutation/)
+  assert.match(sql, /CREATE OR REPLACE FUNCTION public\.app_department_allowed/)
+  assert.match(sql, /BEFORE UPDATE OR DELETE ON operational\.audit_logs/)
+  assert.match(sql, /corrects_measurement_id/)
+  assert.match(sql, /correction_justification/)
+  assert.match(sql, /public\.app_rbac_allowed\('occurrences', 'can_write'\)/)
+})
+
 test('versioned migrations run once and are wrapped in a transaction', async () => {
   const applied = new Set()
   const executed = []
@@ -119,4 +162,6 @@ test('versioned migrations run once and are wrapped in a transaction', async () 
   assert.ok(applied.has('002'))
   assert.ok(applied.has('003'))
   assert.ok(applied.has('004'))
+  assert.ok(applied.has('005'))
+  assert.ok(applied.has('006'))
 })

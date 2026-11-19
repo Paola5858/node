@@ -16,6 +16,7 @@ const FIELD_ALIASES_BY_ENTITY = {
     weighed_at: ['weighed_at', 'data_pesagem', 'data_hora_pesagem', 'timestamp', 'date', 'datetime'],
     gross_weight: ['gross_weight', 'peso_bruto', 'bruto'],
     tare_weight: ['tare_weight', 'peso_tara', 'tara'],
+    weight_unit: ['weight_unit', 'unidade_peso', 'unidade_de_peso'],
     supplier: ['supplier', 'fornecedor'],
     farm: ['farm', 'fazenda', 'propriedade'],
     plot: ['plot', 'talhao', 'talhao_codigo'],

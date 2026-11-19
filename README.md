@@ -35,6 +35,18 @@ O **Cana Intelligence** é construído em uma arquitetura limpa, resiliente e se
 - `UMIDADE_LAB` em fração decimal é normalizada uma vez para percentual; valor e unidade originais permanecem imutáveis.
 - Portal e Dashboard leem as métricas separadas do fato analítico de qualidade de importação: completude, atraso da fonte, duplicidade, integridade referencial, reconhecimento de unidades, conciliação entre fontes e cobertura por indicador. Não há nota agregada.
 - O CSV de auditoria contém somente linhas rejeitadas/suspeitas e seus motivos técnicos.
+- O catálogo versionado de KPIs cobre volume, qualidade, produtividade, ATR recuperável, execução, logística, perdas, qualidade do dado e domínios preparados para industrial/econômico. Cada versão registra unidade, granularidade, agregação, campos necessários, limites/meta/tolerância quando homologados, direção desejável, fonte, vigência, fórmula e responsável.
+- `ATR_WEIGHTED` e `ATR_TONNES` usam somente análise válida associada a amostra e carga identificada. Toneladas são calculadas apenas quando a unidade da pesagem foi informada como `kg` ou `t`; atrasos críticos, análises pendentes, cargas sem vínculo e unidades desconhecidas bloqueiam o resultado com motivo estruturado. Não há média simples nem preenchimento de ausências com zero.
+- `TCH` requer produção e hectares colhidos compatíveis por talhão e safra; sem registros compatíveis, o cálculo é bloqueado. Paradas são isoladas dos cálculos de eficiência, e KPIs industriais sem fonte operacional conciliada também retornam bloqueados, nunca estimados.
+- A produção e a área colhida podem ser registradas por `POST /api/metrics/harvest-production`, com unidade, safra e talhão compatíveis; correções criam novas versões imutáveis e a linhagem usa a versão mais recente de cada talhão/safra.
+
+### 2.2.1 Rastreabilidade operacional, ocorrências e auditoria
+- `GET /api/operations/traceability` apresenta cargas, pesagens de entrada/saída, amostras e análises relacionadas, destacando cargas/amostras órfãs e o estado de origem. Análises guardam modalidade automática/manual, método, equipamento, calibração e vínculo de repetição.
+- Estados de condição operacional, condição do dado, prioridade, investigação, liberação e confirmação da origem são armazenados separadamente em `record_states`. A liberação de exceção e a confirmação de origem exigem permissão privilegiada.
+- Ocorrências exigem unidade, responsável, prazo, recorte, escopo afetado e evidência vinculada a KPI, carga ou amostra. O workflow só permite `open` → `in_analysis` → `action_defined` → `executed` → `verified`; a verificação registra resultado e reincidência.
+- Pesagens de carga e calibrações são eventos imutáveis. Correções de medições criam uma nova medição versionada com justificativa, preservam o registro original e enfileiram evento de recálculo para o período da safra, sem alterar fechamentos anteriores.
+- Análises lançadas pela API exigem modalidade e método; análises automáticas também exigem equipamento e calibração válida no horário da medição. Repetições ficam vinculadas à análise original e todo resultado novo inicia pendente de validação.
+- `audit_logs` é append-only, com trigger PostgreSQL que rejeita `UPDATE` e `DELETE`; mudanças de estado, ocorrência, pesagem, calibração e correção registram ator, antes/depois e justificativa quando aplicável.
 
 ### 2.3 Integração com Power BI
 - Incorporação do dashboard por link público de publicação na web (`app.powerbi.com/view?r=...`). A aplicação também aceita URLs `reportEmbed` legadas com `reportId` e `ctid` válidos.
@@ -137,6 +149,17 @@ npm run build
 | Método | Rota | Descrição |
 |---|---|---|
 | `GET` | `/api/health` | Healthcheck do serviço |
+| `GET` | `/api/metrics` | Catálogo de indicadores homologados, versões, regras e responsáveis |
+| `GET` | `/api/metrics/:code/lineage?start=YYYY-MM-DD&end=YYYY-MM-DD` | Valor calculado ou bloqueio estruturado, fórmula/versão, registros incluídos/excluídos, cobertura, limitações e homologação |
+| `POST` | `/api/metrics/harvest-production` | Registra versão imutável de toneladas e hectares colhidos por safra/talhão para cálculo de TCH |
+| `GET` | `/api/operations/traceability?unitId=:id&start=YYYY-MM-DD&end=YYYY-MM-DD` | Rastreia cargas, pesagens, amostras, análises, calibrações, estados independentes e órfãos |
+| `PATCH` | `/api/operations/{loads\|samples\|quality-analyses\|measurements\|occurrences}/:id/states` | Atualiza dimensões independentes de estado com justificativa auditada |
+| `POST` | `/api/operations/loads/:id/weighings` | Registra pesagem imutável de entrada ou saída |
+| `POST` | `/api/operations/samples/:id/analyses` | Registra análise laboratorial com modalidade, método, equipamento/calibração e repetição |
+| `GET / POST` | `/api/operations/equipment/:id/calibrations` | Consulta ou registra calibração imutável de equipamento |
+| `GET / POST` | `/api/occurrences` | Lista ou abre ocorrência com responsável, prazo, escopo, recorte e evidências |
+| `POST` | `/api/occurrences/:id/workflow` | Avança uma única etapa do fluxo; exige resultado e reincidência ao verificar eficácia |
+| `POST` | `/api/measurements/:id/corrections` | Registra correção versionada com justificativa, auditoria e recálculo pendente |
 | `POST` | `/api/auth/register` | Cria organização e conta de responsável |
 | `POST` | `/api/auth/login` | Inicia sessão com cookie HttpOnly e token CSRF |
 | `GET` | `/api/auth/session` | Obtém dados da sessão e token CSRF atual |
@@ -163,6 +186,8 @@ npm run build
 | `POST` | `/api/rules` | Cria regra técnica em rascunho com limites explícitos |
 | `POST` | `/api/rules/:id/homologate` | Homologa regra técnica com justificativa e auditoria |
 | `POST` | `/api/periods/:harvestId/close` | Fecha uma versão imutável do período/safra |
+
+As versões iniciais do catálogo de métricas são registradas para a organização no provisionamento e vinculadas ao responsável inicial. Versões homologadas são imutáveis; correções exigem uma nova versão.
 
 ---
 
