@@ -94,7 +94,7 @@ export function createDatabase({ environment = process.env.APP_ENV || 'DEV', con
 }
 
 export async function migrateDatabase(db) {
-  await db.query(`CREATE TABLE IF NOT EXISTS schema_migrations (
+  await db.query(`CREATE TABLE IF NOT EXISTS public.schema_migrations (
     version text PRIMARY KEY,
     applied_at timestamptz NOT NULL DEFAULT now()
   )`)
@@ -104,10 +104,10 @@ export async function migrateDatabase(db) {
     const sql = await readFile(join(migrationDirectory, file), 'utf8')
     await db.transaction(async (client) => {
       await client.query("SELECT pg_advisory_xact_lock(hashtext('cana-intelligence-migrations'))")
-      const alreadyApplied = await client.query('SELECT 1 FROM schema_migrations WHERE version = $1', [version])
+      const alreadyApplied = await client.query('SELECT 1 FROM public.schema_migrations WHERE version = $1', [version])
       if (alreadyApplied.rowCount) return
       await client.query(sql)
-      await client.query('INSERT INTO schema_migrations (version) VALUES ($1)', [version])
+      await client.query('INSERT INTO public.schema_migrations (version) VALUES ($1)', [version])
     })
   }
 }

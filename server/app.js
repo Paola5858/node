@@ -458,7 +458,7 @@ export function createApiHandler({
             userId: user.id,
             allowedUnitIds: ['*'],
             allowedFrontIds: ['*'],
-            permissionCodes: ['users:can_write', 'reports:can_write', 'analytics:can_write'],
+            permissionCodes: ['users:can_write', 'reports:can_write', 'analytics:can_read', 'analytics:can_write'],
             accessLevel: 'strategic',
             department: 'ti',
           })

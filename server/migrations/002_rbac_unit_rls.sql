@@ -440,7 +440,7 @@ BEGIN
   ]
   LOOP
     EXECUTE format('DROP POLICY tenant_isolation ON %s', schema_table);
-    EXECUTE format('CREATE POLICY tenant_isolation ON %s USING (organization_id = NULLIF(current_setting(''app.current_org_id'', true), '''') AND public.app_unit_dimension_allowed(unit_dim_id, organization_id) AND (equipment_dim_id IS NULL OR EXISTS (SELECT 1 FROM analytics.dim_equipment e WHERE e.organization_id = %s.organization_id AND e.id = %s.equipment_dim_id))) WITH CHECK (organization_id = NULLIF(current_setting(''app.current_org_id'', true), '''') AND public.app_unit_dimension_allowed(unit_dim_id, organization_id) AND (equipment_dim_id IS NULL OR EXISTS (SELECT 1 FROM analytics.dim_equipment e WHERE e.organization_id = %s.organization_id AND e.id = %s.equipment_dim_id))',
+    EXECUTE format('CREATE POLICY tenant_isolation ON %s USING (organization_id = NULLIF(current_setting(''app.current_org_id'', true), '''') AND public.app_unit_dimension_allowed(unit_dim_id, organization_id) AND (equipment_dim_id IS NULL OR EXISTS (SELECT 1 FROM analytics.dim_equipment e WHERE e.organization_id = %s.organization_id AND e.id = %s.equipment_dim_id))) WITH CHECK (organization_id = NULLIF(current_setting(''app.current_org_id'', true), '''') AND public.app_unit_dimension_allowed(unit_dim_id, organization_id) AND (equipment_dim_id IS NULL OR EXISTS (SELECT 1 FROM analytics.dim_equipment e WHERE e.organization_id = %s.organization_id AND e.id = %s.equipment_dim_id)))',
       schema_table, schema_table, schema_table, schema_table, schema_table);
   END LOOP;
 END $$;

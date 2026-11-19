@@ -146,9 +146,9 @@ test('versioned migrations run once and are wrapped in a transaction', async () 
     async transaction(callback) {
       return callback({
         async query(sql, values = []) {
-          if (sql.startsWith('SELECT 1 FROM schema_migrations')) return { rowCount: applied.has(values[0]) ? 1 : 0 }
+          if (sql.startsWith('SELECT 1 FROM public.schema_migrations')) return { rowCount: applied.has(values[0]) ? 1 : 0 }
           executed.push(sql)
-          if (sql.startsWith('INSERT INTO schema_migrations')) applied.add(values[0])
+          if (sql.startsWith('INSERT INTO public.schema_migrations')) applied.add(values[0])
           return { rowCount: 0 }
         },
       })
@@ -164,4 +164,6 @@ test('versioned migrations run once and are wrapped in a transaction', async () 
   assert.ok(applied.has('004'))
   assert.ok(applied.has('005'))
   assert.ok(applied.has('006'))
+  assert.ok(executed.some((sql) => sql.includes('CREATE TABLE IF NOT EXISTS public.schema_migrations')))
+  assert.ok(executed.some((sql) => sql.startsWith('INSERT INTO public.schema_migrations')))
 })
